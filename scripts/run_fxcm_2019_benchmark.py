@@ -28,6 +28,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("benchmark-results/fxcm-eurusd-m1-2019.json"),
     )
+    parser.add_argument(
+        "--families",
+        nargs="+",
+        choices=sorted(FAMILIES),
+        default=None,
+        help="Optional subset of strategy families to evaluate.",
+    )
     return parser
 
 
@@ -38,8 +45,6 @@ def main(argv: list[str] | None = None) -> int:
     diagnostics = diagnose_dataset(frame)
     threshold = break_even_win_rate(HYPOTHETICAL_PAYOUT)
 
-    # Longer history justifies materially stronger sample requirements than the
-    # short engineering benchmarks. These thresholds are fixed before search.
     gate = ValidationGate(
         min_trades=100,
         min_expectancy=0.0,
@@ -56,9 +61,11 @@ def main(argv: list[str] | None = None) -> int:
         for expiry in EXPIRIES
     ]
 
+    selected_names = args.families or list(FAMILIES)
     families: dict[str, object] = {}
     total_evaluations = 0
-    for name, family in FAMILIES.items():
+    for name in selected_names:
+        family = FAMILIES[name]
         result = run_matrix_experiment(
             frame,
             family.builder,
@@ -66,6 +73,7 @@ def main(argv: list[str] | None = None) -> int:
             variants,
             objective="wilson_low",
             search_min_trades=200,
+            search_min_expectancy=0.0,
             gate=gate,
             prepared_factory=family.prepared_factory,
         )
@@ -106,6 +114,7 @@ def main(argv: list[str] | None = None) -> int:
         fixed_payout=HYPOTHETICAL_PAYOUT,
         expiries=EXPIRIES,
         min_development_trades=200,
+        min_development_expectancy=0.0,
         min_validation_trades=100,
         min_locked_test_trades=100,
         require_validation_wilson_above_break_even=True,
@@ -150,6 +159,7 @@ def main(argv: list[str] | None = None) -> int:
             "locked_test_fraction": 0.20,
             "search_objective": "wilson_low",
             "minimum_development_trades": 200,
+            "minimum_development_expectancy": 0.0,
             "minimum_validation_trades": gate.min_trades,
             "minimum_locked_test_trades": gate.min_locked_test_trades,
             "validation_requires_positive_expectancy": True,
@@ -157,6 +167,7 @@ def main(argv: list[str] | None = None) -> int:
             "locked_evidence_requires_positive_expectancy": True,
             "locked_evidence_requires_wilson_lower_above_break_even": True,
             "parameters_fixed_before_validation": True,
+            "selected_families": selected_names,
         },
         "development_configurations_evaluated": total_evaluations,
         "strategy_families": families,
@@ -180,6 +191,7 @@ def main(argv: list[str] | None = None) -> int:
             name,
             "status=", values["status"],
             "dev_win_rate=", (values.get("best_development") or {}).get("metrics", {}).get("win_rate"),
+            "dev_expectancy=", (values.get("best_development") or {}).get("metrics", {}).get("expectancy"),
             "validation_win_rate=", validation.get("win_rate"),
             "validation_wilson_low=", validation.get("wilson_low"),
             "locked_win_rate=", locked.get("win_rate"),
