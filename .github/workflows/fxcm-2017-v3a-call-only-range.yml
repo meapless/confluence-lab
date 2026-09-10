@@ -1,0 +1,45 @@
+name: FXCM EURUSD 2017 V3A CALL-only Range
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "research/hypotheses/v3a-call-only-range-preregistration.md"
+      - "src/confluence_lab/hypotheses_v3.py"
+      - "tests/test_hypotheses_v3.py"
+      - "scripts/run_fxcm_2017_call_only_range_replication.py"
+      - ".github/workflows/fxcm-2017-v3a-call-only-range.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  replicate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: Verify research tests
+        run: pytest
+
+      - name: Run preregistered V3A replication
+        run: python scripts/run_fxcm_2017_call_only_range_replication.py --output benchmark-results/fxcm-eurusd-m1-2017-v3a-call-only-range.json
+
+      - name: Upload V3A report
+        uses: actions/upload-artifact@v4
+        with:
+          name: fxcm-eurusd-2017-v3a-call-only-range
+          path: benchmark-results/fxcm-eurusd-m1-2017-v3a-call-only-range.json
+          if-no-files-found: error
+          retention-days: 30
