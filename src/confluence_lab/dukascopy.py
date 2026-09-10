@@ -23,34 +23,42 @@ def price_divisor(symbol: str) -> int:
     return 1_000 if normalize_symbol(symbol).endswith("JPY") else 100_000
 
 
-def _as_utc_hour(value: datetime) -> datetime:
+def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    return value.astimezone(timezone.utc)
 
 
-def dukascopy_tick_url(symbol: str, hour: datetime) -> str:
+def _as_utc_day(value: datetime) -> datetime:
+    value = _as_utc(value)
+    return value.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def dukascopy_tick_url(symbol: str, day: datetime) -> str:
+    """Return the current daily Dukascopy BI5 datafeed URL.
+
+    Dukascopy months are zero-indexed in the datafeed path: January=00.
+    """
     symbol = normalize_symbol(symbol)
-    hour = _as_utc_hour(hour)
-    month = hour.month - 1
+    day = _as_utc_day(day)
+    month = day.month - 1
     return (
         "https://www.dukascopy.com/datafeed/"
-        f"{symbol}/{hour.year}/{month:02d}/{hour.day:02d}/{hour.hour:02d}h_ticks.bi5"
+        f"{symbol}/{day.year}/{month:02d}/{day.day:02d}_ticks.bi5"
     )
 
 
-def decode_bi5_ticks(payload: bytes, *, symbol: str, hour: datetime) -> pd.DataFrame:
-    """Decode one LZMA-compressed Dukascopy hourly tick file."""
+def decode_bi5_ticks(payload: bytes, *, symbol: str, day: datetime) -> pd.DataFrame:
+    """Decode one LZMA-compressed Dukascopy daily tick file."""
     if not payload:
         return pd.DataFrame(
             columns=["timestamp", "ask", "bid", "ask_volume", "bid_volume"]
         )
-
     raw = lzma.decompress(payload)
     if len(raw) % _TICK.size:
         raise ValueError("BI5 payload length is not a multiple of the 20-byte tick record")
 
-    base = _as_utc_hour(hour)
+    base = _as_utc_day(day)
     divisor = price_divisor(symbol)
     rows: list[dict[str, object]] = []
     for millisecond, ask_raw, bid_raw, ask_volume, bid_volume in _TICK.iter_unpack(raw):
@@ -66,23 +74,22 @@ def decode_bi5_ticks(payload: bytes, *, symbol: str, hour: datetime) -> pd.DataF
     return pd.DataFrame.from_records(rows)
 
 
-def fetch_tick_hour(
-    symbol: str,
-    hour: datetime,
-    *,
-    timeout: float = 20.0,
-) -> pd.DataFrame:
-    """Download one hourly tick file; known missing hours return an empty frame."""
-    url = dukascopy_tick_url(symbol, hour)
-    request = Request(url, headers={"User-Agent": "ConfluenceLab/0.2"})
+def fetch_tick_day(symbol: str, day: datetime, *, timeout: float = 20.0) -> pd.DataFrame:
+    """Download and decode one daily Dukascopy tick file.
+
+    Missing/holiday days return an empty frame. Network/server failures other
+    than 404 are raised so a research dataset cannot silently skip outages.
+    """
+    url = dukascopy_tick_url(symbol, day)
+    request = Request(url, headers={"User-Agent": "ConfluenceLab/0.3"})
     try:
         with urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed trusted host
             payload = response.read()
     except HTTPError as exc:
         if exc.code == 404:
-            return decode_bi5_ticks(b"", symbol=symbol, hour=hour)
+            return decode_bi5_ticks(b"", symbol=symbol, day=day)
         raise
-    return decode_bi5_ticks(payload, symbol=symbol, hour=hour)
+    return decode_bi5_ticks(payload, symbol=symbol, day=day)
 
 
 def ticks_to_candles(
@@ -103,7 +110,6 @@ def ticks_to_candles(
                 "spread_mean",
             ]
         )
-
     required = {"timestamp", "ask", "bid", "ask_volume", "bid_volume"}
     missing = required - set(ticks.columns)
     if missing:
@@ -144,26 +150,30 @@ def download_range(
     timeframe: str = "1min",
     timeout: float = 20.0,
 ) -> DukascopyDownloadResult:
-    """Download [start, end) hour-by-hour, retaining ticks and aggregated bars."""
+    """Download an exact UTC interval [start, end) using daily BI5 files."""
     symbol = normalize_symbol(symbol)
-    start_utc = _as_utc_hour(start)
-    end_utc = _as_utc_hour(end)
+    start_utc = _as_utc(start)
+    end_utc = _as_utc(end)
     if end_utc <= start_utc:
         raise ValueError("end must be after start")
 
     pieces: list[pd.DataFrame] = []
-    current = start_utc
-    while current < end_utc:
-        ticks = fetch_tick_hour(symbol, current, timeout=timeout)
+    current_day = _as_utc_day(start_utc)
+    last_day = _as_utc_day(end_utc - timedelta(microseconds=1))
+    while current_day <= last_day:
+        ticks = fetch_tick_day(symbol, current_day, timeout=timeout)
         if not ticks.empty:
             pieces.append(ticks)
-        current += timedelta(hours=1)
+        current_day += timedelta(days=1)
 
     if pieces:
         all_ticks = pd.concat(pieces, ignore_index=True).sort_values(
             "timestamp", kind="stable"
         )
+        mask = (all_ticks["timestamp"] >= start_utc) & (all_ticks["timestamp"] < end_utc)
+        all_ticks = all_ticks.loc[mask].reset_index(drop=True)
     else:
-        all_ticks = decode_bi5_ticks(b"", symbol=symbol, hour=start_utc)
+        all_ticks = decode_bi5_ticks(b"", symbol=symbol, day=start_utc)
+
     candles = ticks_to_candles(all_ticks, timeframe=timeframe)
     return DukascopyDownloadResult(symbol, start_utc, end_utc, all_ticks, candles)
