@@ -135,4 +135,11 @@ def run_matrix_experiment(
         return MatrixExperimentResult(best, validation, None, "rejected_validation")
 
     test = run_backtest(split.test, strategy, config).metrics
+    if test.trades < gate.min_locked_test_trades:
+        return MatrixExperimentResult(
+            best,
+            validation,
+            test,
+            "insufficient_locked_test",
+        )
     return MatrixExperimentResult(best, validation, test, "tested")
