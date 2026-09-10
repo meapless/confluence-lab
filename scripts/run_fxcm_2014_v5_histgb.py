@@ -88,8 +88,14 @@ def _development_search_payload(experiment) -> list[dict[str, object]]:
 
 
 def _locked_robustness(frame: pd.DataFrame, experiment):
-    if experiment.candidate is None or experiment.locked_test is None:
+    # Preregistered V5 rule: robustness diagnostics are permitted only after the
+    # candidate has passed the primary locked-test evidence gate. A failed locked
+    # test is recorded as the decision and is not mined for additional subgroups.
+    if experiment.status != "passed_locked":
         return None
+    if experiment.candidate is None or experiment.locked_test is None:
+        raise RuntimeError("passed_locked result is missing its candidate or locked test")
+
     candidate = experiment.candidate
     primary = experiment.locked_test
 
@@ -215,6 +221,7 @@ def main(argv: list[str] | None = None) -> int:
             "minimum_locked_resolved_trades": MIN_LOCKED_RESOLVED,
             "hyperparameter_search": False,
             "gap_safe_targets_and_settlement": True,
+            "robustness_policy": "only_after_passed_locked",
         },
         "status": experiment.status,
         "complete_development_search": _development_search_payload(experiment),
