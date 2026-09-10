@@ -4,11 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "confluence-lab"
-version = "0.4.0"
+version = "0.5.0"
 description = "Evidence-driven research engine for payout-aware short-horizon trading strategies"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["numpy>=2.0", "pandas>=2.2", "pyarrow>=17.0"]
+dependencies = [
+    "numpy>=2.0",
+    "pandas>=2.2",
+    "pyarrow>=17.0",
+    "scikit-learn>=1.9,<2",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
