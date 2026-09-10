@@ -1,0 +1,66 @@
+name: Public EURUSD Benchmark
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "scripts/run_public_benchmark.py"
+      - ".github/workflows/public-benchmark.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: Verify research tests
+        run: pytest
+
+      - name: Run pinned public EURUSD benchmark
+        run: python scripts/run_public_benchmark.py --output benchmark-results/public-eurusd-m1.json
+
+      - name: Show benchmark summary
+        if: always()
+        run: |
+          if [ -f benchmark-results/public-eurusd-m1.json ]; then
+            python - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path("benchmark-results/public-eurusd-m1.json").read_text())
+          print("rows:", report["dataset"]["rows"])
+          print("evaluations:", report["development_configurations_evaluated"])
+          for name, result in report["strategy_families"].items():
+              locked = result.get("locked_test") or {}
+              print(
+                  name,
+                  "status=", result["status"],
+                  "validation_win_rate=", (result.get("validation") or {}).get("win_rate"),
+                  "locked_win_rate=", locked.get("win_rate"),
+                  "locked_expectancy=", locked.get("expectancy"),
+                  "evidence_pass=", result["locked_test_evidence_pass"],
+              )
+          PY
+          fi
+
+      - name: Upload benchmark report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-eurusd-benchmark
+          path: benchmark-results/public-eurusd-m1.json
+          if-no-files-found: warn
+          retention-days: 30
