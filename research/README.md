@@ -14,7 +14,7 @@ Regular-FX benchmarks are **not Pocket Option or OTC evidence**. Fixed binary pa
 | FXCM 2019 corrected selector | same 2019 data | Trend / Breakout only | no positive-expectancy dev candidate | not run | locked not opened | **Rejected** |
 | FXCM 2018 Range replication | EUR/USD M1, full 2018 | exact frozen 2019 Range candidate | no tuning | no tuning | 55.49%, Wilson low 54.27%; delay/payout fragile | **Failed replication** |
 | FXCM 2018 V2 | same 2018 data, preregistered | HTF Pullback / Compression Breakout / Sweep Reversal | Sweep passed | Sweep 63.03%, Wilson low 56.34% | Sweep locked: 51.71%, expectancy -0.0574 | **Locked failure** |
-| FXCM 2017 V3 CALL Range | EUR/USD M1, full 2017 | exact CALL-only hypothesis generated from 2018 diagnostic | no tuning | no tuning | pending at time of ledger creation | **Pending** |
+| FXCM 2017 V3 CALL Range | EUR/USD M1, full 2017 | exact CALL-only hypothesis generated from 2018 diagnostic | no tuning | no tuning | 57.49%, Wilson low 53.28%; bootstrap crossed zero; delay fragile | **Failed replication / line closed** |
 
 ## Important negative results
 
@@ -50,6 +50,20 @@ This is the strongest example so far of why locked data matters:
 
 The strategy is rejected. The 2018 locked slice is now seen and may not be retuned to rescue it.
 
+### V3 CALL-only Range Reversion
+
+The CALL-only asymmetry observed post-hoc in 2018 was preregistered and tested without tuning on full-year 2017:
+
+- 548 trades;
+- 57.49% win rate;
+- Wilson lower: **53.28%**, below 54.95% break-even;
+- expectancy: +0.0457;
+- ordinary bootstrap 2.5th percentile expectancy: **-0.0292**;
+- one additional minute of entry delay: **negative expectancy**;
+- large month-to-month instability, including October expectancy of -0.30.
+
+The preregistered pass rule failed. This research line is **closed** and will not be retuned on 2017.
+
 ## Research rules
 
 1. Hypotheses and search spaces should be frozen before independent evaluation.
@@ -62,6 +76,7 @@ The strategy is rejected. The 2018 locked slice is now seen and may not be retun
 8. Post-hoc subgroup discoveries are new hypotheses, not retroactive rescues.
 9. Failed studies are preserved.
 10. No Martingale or loss-chasing sizing is used to manufacture a favorable equity curve.
+11. Ordinary bootstrap uncertainty should be supplemented with moving-block bootstrap diagnostics when trade outcomes may be serially clustered.
 
 ## Evidence files
 
@@ -71,4 +86,8 @@ The strategy is rejected. The 2018 locked slice is now seen and may not be retun
 
 ## Current next question
 
-The only live hypothesis at the time this index was created is whether the post-hoc 2018 CALL-only Range Reversion asymmetry replicates without tuning on full-year FXCM 2017. If it fails, that line is closed. If it passes, it must still survive another untouched year and eventually broker-specific Pocket demo/payout data before it can support any product claim.
+V1–V3 have exhausted the current hand-designed threshold families without producing replicated evidence. The next research stage should therefore **change methodology rather than retune thresholds**.
+
+V4 will test whether a single, interpretable, regularized probabilistic model can extract any stable directional information from the causal feature set already built. The intended first model is an L2-regularized logistic regression with a frozen feature list, standardized training features, a fixed five-minute expiry target, conservative probability-to-trade thresholds, and chronological independent-year evaluation.
+
+Years 2017–2019 are now treated as seen development material. New-year validation/locked outcomes must remain untouched until the V4 model, features, thresholds, and pass/fail rules are preregistered. Even a successful regular-FX V4 result would still require broker-specific Pocket demo data and contemporaneous payout evidence before supporting a Pocket-related claim.
