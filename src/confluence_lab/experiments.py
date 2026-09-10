@@ -60,6 +60,7 @@ def run_research_experiment(
     config: BacktestConfig | None = None,
     objective: str = "expectancy",
     search_min_trades: int = 30,
+    search_min_expectancy: float | None = None,
     gate: ValidationGate = ValidationGate(),
 ) -> ExperimentResult:
     """Run a gated development -> validation -> locked-test experiment.
@@ -77,6 +78,7 @@ def run_research_experiment(
         config=config,
         objective=objective,
         min_trades=search_min_trades,
+        min_expectancy=search_min_expectancy,
     )
     viable = [candidate for candidate in ranked if candidate.score != float("-inf")]
     if not viable:
