@@ -16,6 +16,32 @@ class ValidationGate:
     min_trades: int = 30
     min_expectancy: float = 0.0
     min_locked_test_trades: int = 30
+    min_wilson_low: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.min_trades < 1:
+            raise ValueError("min_trades must be >= 1")
+        if self.min_locked_test_trades < 1:
+            raise ValueError("min_locked_test_trades must be >= 1")
+        if self.min_wilson_low is not None and not 0 <= self.min_wilson_low <= 1:
+            raise ValueError("min_wilson_low must be between 0 and 1")
+
+
+def passes_validation_gate(metrics: PerformanceMetrics, gate: ValidationGate) -> bool:
+    """Return True only when validation evidence clears every configured gate.
+
+    ``min_wilson_low`` is useful when a single fixed payout implies a single
+    break-even win rate. Leave it unset for variable-payout datasets, where
+    payout-aware P&L uncertainty should be assessed directly instead.
+    """
+    if metrics.trades < gate.min_trades:
+        return False
+    if metrics.expectancy is None or metrics.expectancy <= gate.min_expectancy:
+        return False
+    if gate.min_wilson_low is not None:
+        if metrics.wilson_low is None or metrics.wilson_low <= gate.min_wilson_low:
+            return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -60,11 +86,7 @@ def run_research_experiment(
     strategy = builder(best.params)
     validation_metrics = run_backtest(split.validation, strategy, config).metrics
 
-    if (
-        validation_metrics.trades < gate.min_trades
-        or validation_metrics.expectancy is None
-        or validation_metrics.expectancy <= gate.min_expectancy
-    ):
+    if not passes_validation_gate(validation_metrics, gate):
         return ExperimentResult(best, validation_metrics, None, "rejected_validation")
 
     test_metrics = run_backtest(split.test, strategy, config).metrics
