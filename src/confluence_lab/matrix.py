@@ -6,7 +6,7 @@ from typing import Any, Callable, Iterable
 import pandas as pd
 
 from .backtest import BacktestConfig, _run_on_validated, _validate_frame, run_backtest
-from .experiments import ValidationGate
+from .experiments import ValidationGate, passes_validation_gate
 from .metrics import PerformanceMetrics
 from .optimization import StrategyBuilder, iter_parameter_grid, score_metrics
 from .splits import chronological_split
@@ -127,11 +127,7 @@ def run_matrix_experiment(
     config = best.execution.backtest_config()
     strategy = builder(best.params)
     validation = run_backtest(split.validation, strategy, config).metrics
-    if (
-        validation.trades < gate.min_trades
-        or validation.expectancy is None
-        or validation.expectancy <= gate.min_expectancy
-    ):
+    if not passes_validation_gate(validation, gate):
         return MatrixExperimentResult(best, validation, None, "rejected_validation")
 
     test = run_backtest(split.test, strategy, config).metrics
