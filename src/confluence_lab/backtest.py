@@ -8,6 +8,7 @@ import pandas as pd
 from .metrics import PerformanceMetrics, calculate_metrics
 from .payouts import TiePolicy, break_even_win_rate
 from .strategies import SignalFunction
+from .timebase import contiguous_horizon_mask
 
 _REQUIRED_COLUMNS = {"timestamp", "open", "high", "low", "close"}
 _TRADE_COLUMNS = [
@@ -35,6 +36,8 @@ class BacktestConfig:
     tie_policy: TiePolicy = TiePolicy.REFUND
     allow_overlapping_positions: bool = True
     cooldown_bars: int = 0
+    require_contiguous_bars: bool = True
+    expected_interval_seconds: float | None = None
 
     def __post_init__(self) -> None:
         if self.expiry_bars < 1:
@@ -49,6 +52,8 @@ class BacktestConfig:
             raise ValueError("stake must be positive")
         if self.cooldown_bars < 0:
             raise ValueError("cooldown_bars must be >= 0")
+        if self.expected_interval_seconds is not None and self.expected_interval_seconds <= 0:
+            raise ValueError("expected_interval_seconds must be positive")
 
 
 @dataclass(frozen=True)
@@ -71,6 +76,7 @@ def _validate_frame(frame: pd.DataFrame, config: BacktestConfig) -> pd.DataFrame
         raise ValueError(f"payout column {config.payout_column!r} not found")
 
     ordered = frame.sort_values("timestamp", kind="stable").reset_index(drop=True).copy()
+    ordered["timestamp"] = pd.to_datetime(ordered["timestamp"], utc=True, errors="raise")
     if ordered["timestamp"].duplicated().any():
         raise ValueError("duplicate timestamps are not allowed")
     if (ordered["high"] < ordered[["open", "close", "low"]].max(axis=1)).any():
@@ -133,6 +139,25 @@ def _run_on_validated(
     directions = directions[in_bounds]
     if not len(signal_indices):
         return _empty_result(config)
+
+    if config.require_contiguous_bars:
+        expected_interval = (
+            pd.Timedelta(seconds=float(config.expected_interval_seconds))
+            if config.expected_interval_seconds is not None
+            else None
+        )
+        contiguous = contiguous_horizon_mask(
+            data["timestamp"],
+            signal_indices,
+            exit_indices,
+            expected_interval=expected_interval,
+        )
+        signal_indices = signal_indices[contiguous]
+        entry_indices = entry_indices[contiguous]
+        exit_indices = exit_indices[contiguous]
+        directions = directions[contiguous]
+        if not len(signal_indices):
+            return _empty_result(config)
 
     if config.payout_column:
         payout_values = pd.to_numeric(
