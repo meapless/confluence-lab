@@ -127,16 +127,19 @@ class PocketResearchAdapter:
         *,
         period_seconds: int,
         duration_seconds: int,
-        include_payout: bool = True,
     ) -> pd.DataFrame:
+        """Fetch historical candles without fabricating historical payouts.
+
+        The wrapper can expose the current payout separately via get_payout().
+        A current payout must never be copied backward across historical candles.
+        """
         client = await self._ensure_client()
         raw = await client.get_candles(asset, period_seconds, duration_seconds)
-        payout = await self.get_payout(asset) if include_payout else None
         return normalize_pocket_candles(
             raw,
             asset=asset,
             period_seconds=period_seconds,
-            payout=payout,
+            payout=None,
         )
 
     async def close(self) -> None:
