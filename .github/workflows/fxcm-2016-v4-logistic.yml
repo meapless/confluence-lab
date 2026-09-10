@@ -1,0 +1,48 @@
+name: FXCM EURUSD 2016 V4 Logistic Baseline
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "research/hypotheses/v4-logistic-baseline-preregistration.md"
+      - "src/confluence_lab/ml.py"
+      - "src/confluence_lab/ml_experiment.py"
+      - "tests/test_ml.py"
+      - "tests/test_ml_experiment.py"
+      - "scripts/run_fxcm_2016_v4_logistic.py"
+      - ".github/workflows/fxcm-2016-v4-logistic.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: Verify research tests
+        run: pytest
+
+      - name: Run preregistered V4 benchmark
+        run: python scripts/run_fxcm_2016_v4_logistic.py --output benchmark-results/fxcm-eurusd-m1-2016-v4-logistic.json
+
+      - name: Upload V4 report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fxcm-eurusd-2016-v4-logistic
+          path: benchmark-results/fxcm-eurusd-m1-2016-v4-logistic.json
+          if-no-files-found: warn
+          retention-days: 30
