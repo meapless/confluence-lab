@@ -1,0 +1,45 @@
+name: FXCM EURUSD 2017 CALL Range Replication
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "scripts/run_fxcm_2017_call_range_replication.py"
+      - ".github/workflows/fxcm-2017-call-range-replication.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  replicate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: Verify research tests
+        run: pytest
+
+      - name: Run preregistered 2017 CALL-only replication
+        run: >-
+          python scripts/run_fxcm_2017_call_range_replication.py
+          --output benchmark-results/fxcm-eurusd-m1-2017-call-range-replication.json
+
+      - name: Upload replication report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fxcm-eurusd-2017-call-range-replication
+          path: benchmark-results/fxcm-eurusd-m1-2017-call-range-replication.json
+          if-no-files-found: warn
+          retention-days: 30
