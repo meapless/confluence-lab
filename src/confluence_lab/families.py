@@ -12,6 +12,14 @@ from .hypotheses import (
     prepare_breakout,
     prepare_range_reversion,
 )
+from .hypotheses_v2 import (
+    build_compression_breakout,
+    build_htf_aligned_pullback,
+    build_sweep_reversal,
+    prepare_compression_breakout,
+    prepare_htf_aligned_pullback,
+    prepare_sweep_reversal,
+)
 from .optimization import StrategyBuilder
 from .strategies import build_trend_pullback, prepare_trend_pullback
 
@@ -56,6 +64,30 @@ BREAKOUT_GRID: dict[str, tuple[Any, ...]] = {
     "trend_filter": (False, True),
 }
 
+HTF_ALIGNED_PULLBACK_GRID: dict[str, tuple[Any, ...]] = {
+    "htf_minutes": (5, 15),
+    "adx_min": (15.0, 20.0, 25.0),
+    "ema_distance_atr": (0.25, 0.50, 0.75),
+    "rsi_trigger": (50.0, 55.0),
+    "atr_pct_max": (0.75, 0.90),
+}
+
+COMPRESSION_BREAKOUT_GRID: dict[str, tuple[Any, ...]] = {
+    "htf_minutes": (5, 15),
+    "lookback": (20, 30),
+    "compression_max": (0.20, 0.35),
+    "body_min": (0.50, 0.65),
+    "atr_expansion_min": (1.0, 1.2),
+}
+
+SWEEP_REVERSAL_GRID: dict[str, tuple[Any, ...]] = {
+    "lookback": (20, 30, 50),
+    "wick_min": (0.50, 0.65),
+    "rsi_edge": (60.0, 65.0),
+    "overshoot_atr": (0.0, 0.10),
+    "liquid_core_only": (False, True),
+}
+
 
 FAMILIES: dict[str, StrategyFamily] = {
     "trend_pullback": StrategyFamily(
@@ -81,6 +113,30 @@ FAMILIES: dict[str, StrategyFamily] = {
         prepared_factory=prepare_breakout,
         parameter_grid=BREAKOUT_GRID,
         intended_regimes=("breakout_candidate", "strong_uptrend", "strong_downtrend", "high_volatility"),
+    ),
+    "htf_aligned_pullback": StrategyFamily(
+        name="htf_aligned_pullback",
+        description="Pullback recovery requiring completed higher-timeframe trend agreement.",
+        builder=build_htf_aligned_pullback,
+        prepared_factory=prepare_htf_aligned_pullback,
+        parameter_grid=HTF_ALIGNED_PULLBACK_GRID,
+        intended_regimes=("strong_uptrend", "weak_uptrend", "strong_downtrend", "weak_downtrend"),
+    ),
+    "compression_breakout": StrategyFamily(
+        name="compression_breakout",
+        description="Prior-volatility compression followed by a close-confirmed breakout aligned with completed HTF trend.",
+        builder=build_compression_breakout,
+        prepared_factory=prepare_compression_breakout,
+        parameter_grid=COMPRESSION_BREAKOUT_GRID,
+        intended_regimes=("breakout_candidate", "high_volatility"),
+    ),
+    "sweep_reversal": StrategyFamily(
+        name="sweep_reversal",
+        description="Failed prior-range breakout with wick rejection and close back inside structure.",
+        builder=build_sweep_reversal,
+        prepared_factory=prepare_sweep_reversal,
+        parameter_grid=SWEEP_REVERSAL_GRID,
+        intended_regimes=("quiet_range", "high_volatility", "uncertain"),
     ),
 }
 
