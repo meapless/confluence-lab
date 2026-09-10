@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 
 from confluence_lab.backtest import BacktestConfig, run_backtest
+from confluence_lab.data import diagnose_dataset, validate_dataset
 from confluence_lab.indicators import add_core_features, ema, rsi
 from confluence_lab.metrics import calculate_metrics
 from confluence_lab.payouts import TiePolicy, break_even_win_rate, settle_binary_trade
@@ -116,3 +117,24 @@ def test_metrics_and_drawdown() -> None:
     assert m.total_pnl == pytest.approx(-0.4)
     assert m.max_losing_streak == 2
     assert m.max_drawdown == pytest.approx(2.0)
+
+
+def test_dataset_diagnostics_detect_gap_and_fingerprint_is_stable() -> None:
+    frame = pd.DataFrame({
+        "timestamp": pd.to_datetime(["2024-01-01T00:00:00Z", "2024-01-01T00:01:00Z", "2024-01-01T00:03:00Z"]),
+        "open": [1.0, 1.1, 1.2], "high": [1.2, 1.3, 1.4], "low": [0.9, 1.0, 1.1], "close": [1.1, 1.2, 1.3],
+    })
+    first = diagnose_dataset(frame)
+    second = diagnose_dataset(frame.sample(frac=1, random_state=9))
+    assert first.missing_intervals == 1
+    assert first.inferred_interval == pd.Timedelta(minutes=1)
+    assert first.fingerprint == second.fingerprint
+
+
+def test_dataset_validation_rejects_duplicate_timestamp() -> None:
+    frame = pd.DataFrame({
+        "timestamp": ["2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z"],
+        "open": [1, 1], "high": [2, 2], "low": [0, 0], "close": [1, 1],
+    })
+    with pytest.raises(ValueError, match="duplicate"):
+        validate_dataset(frame)
