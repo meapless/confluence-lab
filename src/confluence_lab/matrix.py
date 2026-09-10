@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 import pandas as pd
 
-from .backtest import BacktestConfig, run_backtest
+from .backtest import BacktestConfig, _run_on_validated, _validate_frame, run_backtest
 from .experiments import ValidationGate
 from .metrics import PerformanceMetrics
-from .optimization import StrategyBuilder, grid_search
+from .optimization import StrategyBuilder, iter_parameter_grid, score_metrics
 from .splits import chronological_split
 
 
@@ -56,27 +56,42 @@ def grid_search_matrix(
     *,
     objective: str = "expectancy",
     min_trades: int = 30,
+    prepared_factory: Callable[
+        [pd.DataFrame], Callable[[dict[str, Any]], pd.Series]
+    ] | None = None,
 ) -> list[MatrixCandidate]:
-    """Search strategy and execution parameters on one caller-supplied slice."""
+    """Search strategy + execution settings on one caller-supplied slice.
+
+    A strategy signal series is calculated once per strategy parameter set and
+    reused across expiry/payout variants. Execution settings cannot influence
+    the historical signal itself.
+    """
+    variants = list(execution_variants)
+    if not variants:
+        return []
+
+    data = _validate_frame(frame, variants[0].backtest_config())
     candidates: list[MatrixCandidate] = []
-    for execution in execution_variants:
-        ranked = grid_search(
-            frame,
-            builder,
-            parameter_grid,
-            config=execution.backtest_config(),
-            objective=objective,
-            min_trades=min_trades,
-        )
-        candidates.extend(
-            MatrixCandidate(
-                params=item.params,
-                execution=execution,
-                metrics=item.metrics,
-                score=item.score,
+    prepared = prepared_factory(data.copy()) if prepared_factory is not None else None
+
+    for params in iter_parameter_grid(parameter_grid):
+        signal = prepared(params) if prepared is not None else builder(params)(data.copy())
+        for execution in variants:
+            result = _run_on_validated(data, signal, execution.backtest_config())
+            score = score_metrics(
+                result.metrics,
+                objective=objective,
+                min_trades=min_trades,
             )
-            for item in ranked
-        )
+            candidates.append(
+                MatrixCandidate(
+                    params=params,
+                    execution=execution,
+                    metrics=result.metrics,
+                    score=score,
+                )
+            )
+
     return sorted(candidates, key=lambda item: item.score, reverse=True)
 
 
@@ -89,6 +104,9 @@ def run_matrix_experiment(
     objective: str = "expectancy",
     search_min_trades: int = 30,
     gate: ValidationGate = ValidationGate(),
+    prepared_factory: Callable[
+        [pd.DataFrame], Callable[[dict[str, Any]], pd.Series]
+    ] | None = None,
 ) -> MatrixExperimentResult:
     """Tune strategy + expiry/payout settings without exposing the locked test."""
     split = chronological_split(frame)
@@ -99,6 +117,7 @@ def run_matrix_experiment(
         execution_variants,
         objective=objective,
         min_trades=search_min_trades,
+        prepared_factory=prepared_factory,
     )
     viable = [candidate for candidate in ranked if candidate.score != float("-inf")]
     if not viable:
