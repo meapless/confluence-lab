@@ -30,14 +30,17 @@ jobs:
       - name: Verify research tests
         run: pytest
 
-      - name: Run FXCM 2019 EURUSD benchmark
-        run: python scripts/run_fxcm_2019_benchmark.py --output benchmark-results/fxcm-eurusd-m1-2019.json
+      - name: Run corrected-selector FXCM 2019 benchmark
+        run: >-
+          python scripts/run_fxcm_2019_benchmark.py
+          --families trend_pullback breakout
+          --output benchmark-results/fxcm-eurusd-m1-2019-corrected-selector.json
 
       - name: Upload benchmark report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: fxcm-eurusd-2019-benchmark
-          path: benchmark-results/fxcm-eurusd-m1-2019.json
+          name: fxcm-eurusd-2019-corrected-selector
+          path: benchmark-results/fxcm-eurusd-m1-2019-corrected-selector.json
           if-no-files-found: warn
           retention-days: 30
