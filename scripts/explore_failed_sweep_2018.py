@@ -23,6 +23,7 @@ from confluence_lab.stress import performance_by_period
 YEAR = 2018
 SYMBOL = "EURUSD"
 PAYOUT = 0.82
+ANALYSIS_VERSION = "2018-sweep-posthoc-v1"
 PARAMS = SweepReversalParams(
     lookback=20,
     wick_min=0.65,
@@ -76,7 +77,7 @@ def _analyze_slice(frame: pd.DataFrame) -> dict[str, object]:
         "by_volatility_bucket": _records(
             performance_breakdown(enriched, "volatility_bucket", min_trades=20)
         ),
-        "by_month": _records(performance_by_period(result.trades, frequency="ME")),
+        "by_month": _records(performance_by_period(result.trades, frequency="M")),
     }
 
 
@@ -88,6 +89,7 @@ def main(argv: list[str] | None = None) -> int:
 
     report = {
         "study_kind": "posthoc_exploratory_diagnostics_on_failed_locked_candidate",
+        "analysis_version": ANALYSIS_VERSION,
         "confirmatory_status": "NOT_EVIDENCE",
         "warning": (
             "This report inspects a candidate after its locked test failed. Any subgroup "
