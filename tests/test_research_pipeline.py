@@ -1,7 +1,8 @@
 import pandas as pd
 
-from confluence_lab.backtest import BacktestConfig
+from confluence_lab.backtest import BacktestConfig, run_backtest
 from confluence_lab.experiments import ValidationGate, run_research_experiment
+from confluence_lab.matrix import ExecutionVariant, grid_search_matrix, run_matrix_experiment
 from confluence_lab.optimization import grid_search, iter_parameter_grid
 from confluence_lab.registry import append_experiment_record, read_registry, verify_registry
 from confluence_lab.robustness import monte_carlo_trades
@@ -100,3 +101,47 @@ def test_registry_detects_tampering(tmp_path):
     text = path.read_text(encoding="utf-8").replace('"score": 1', '"score": 999')
     path.write_text(text, encoding="utf-8")
     assert not verify_registry(path)
+
+
+def test_payout_floor_is_applied_at_entry():
+    frame = generate_synthetic_ohlc(rows=100, seed=10)
+    frame["payout"] = 0.70
+    frame.loc[frame.index[1::2], "payout"] = 0.90
+    result = run_backtest(
+        frame,
+        directional_builder({"every": 1, "direction": 1}),
+        BacktestConfig(expiry_bars=1, payout_column="payout", min_payout=0.85),
+    )
+    assert not result.trades.empty
+    assert (result.trades["payout"] >= 0.85).all()
+
+
+def test_matrix_search_spans_expiry_and_payout_floor():
+    frame = generate_synthetic_ohlc(rows=400, seed=11)
+    variants = [
+        ExecutionVariant(expiry_bars=1, payout_column="payout", min_payout=0.80),
+        ExecutionVariant(expiry_bars=3, payout_column="payout", min_payout=0.90),
+    ]
+    ranked = grid_search_matrix(
+        frame,
+        directional_builder,
+        {"every": [3], "direction": [-1, 1]},
+        variants,
+        min_trades=5,
+    )
+    assert len(ranked) == 4
+    assert {item.execution.expiry_bars for item in ranked} == {1, 3}
+
+
+def test_matrix_validation_gate_hides_locked_test():
+    frame = generate_synthetic_ohlc(rows=800, seed=12)
+    result = run_matrix_experiment(
+        frame,
+        directional_builder,
+        {"every": [3, 5], "direction": [-1, 1]},
+        [ExecutionVariant(expiry_bars=1, payout_column="payout")],
+        search_min_trades=10,
+        gate=ValidationGate(min_trades=5, min_expectancy=999),
+    )
+    assert result.status == "rejected_validation"
+    assert result.test_metrics is None
