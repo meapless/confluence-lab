@@ -1,0 +1,158 @@
+name: Gap-Safe Evidence Audit
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "research/hypotheses/gap-safe-protocol-audit.md"
+      - ".github/workflows/gap-safe-evidence-audit.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Verify corrected research engine
+        run: pytest
+
+  v4-2016:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Run unchanged V4 protocol under gap-safe engine
+        run: >-
+          python scripts/run_fxcm_2016_v4_logistic.py
+          --output benchmark-results/gap-safe-fxcm-eurusd-m1-2016-v4-logistic.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gap-safe-fxcm-eurusd-2016-v4-logistic
+          path: benchmark-results/gap-safe-fxcm-eurusd-m1-2016-v4-logistic.json
+          if-no-files-found: error
+          retention-days: 30
+
+  v3a-2017:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Run unchanged V3A under gap-safe engine
+        run: >-
+          python scripts/run_fxcm_2017_call_only_range_replication.py
+          --output benchmark-results/gap-safe-fxcm-eurusd-m1-2017-v3a-call-only-range.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gap-safe-fxcm-eurusd-2017-v3a
+          path: benchmark-results/gap-safe-fxcm-eurusd-m1-2017-v3a-call-only-range.json
+          if-no-files-found: error
+          retention-days: 30
+
+  v3b-2017:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Run unchanged V3B under gap-safe engine
+        run: >-
+          python scripts/run_fxcm_2017_moderate_vol_sweep_replication.py
+          --output benchmark-results/gap-safe-fxcm-eurusd-m1-2017-v3b-moderate-vol-sweep.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gap-safe-fxcm-eurusd-2017-v3b
+          path: benchmark-results/gap-safe-fxcm-eurusd-m1-2017-v3b-moderate-vol-sweep.json
+          if-no-files-found: error
+          retention-days: 30
+
+  range-2018:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Run frozen 2018 Range replication under gap-safe engine
+        run: >-
+          python scripts/run_fxcm_2018_range_replication.py
+          --output benchmark-results/gap-safe-fxcm-eurusd-m1-2018-range-replication.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gap-safe-fxcm-eurusd-2018-range-replication
+          path: benchmark-results/gap-safe-fxcm-eurusd-m1-2018-range-replication.json
+          if-no-files-found: error
+          retention-days: 30
+
+  v2-2018:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Run unchanged 2018 V2 search under gap-safe engine
+        run: >-
+          python scripts/run_fxcm_2018_v2_benchmark.py
+          --output benchmark-results/gap-safe-fxcm-eurusd-m1-2018-v2.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gap-safe-fxcm-eurusd-2018-v2
+          path: benchmark-results/gap-safe-fxcm-eurusd-m1-2018-v2.json
+          if-no-files-found: error
+          retention-days: 30
+
+  v1-2019:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Run all V1 families under gap-safe engine
+        run: >-
+          python scripts/run_fxcm_2019_benchmark.py
+          --families trend_pullback range_reversion breakout
+          --output benchmark-results/gap-safe-fxcm-eurusd-m1-2019-v1.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gap-safe-fxcm-eurusd-2019-v1
+          path: benchmark-results/gap-safe-fxcm-eurusd-m1-2019-v1.json
+          if-no-files-found: error
+          retention-days: 30
