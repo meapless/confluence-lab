@@ -38,6 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-search-trades", type=int, default=30)
     parser.add_argument("--min-validation-trades", type=int, default=30)
     parser.add_argument("--min-validation-expectancy", type=float, default=0.0)
+    parser.add_argument("--min-locked-test-trades", type=int, default=30)
     parser.add_argument("--walk-train-bars", type=int, default=10_000)
     parser.add_argument("--walk-test-bars", type=int, default=2_000)
     parser.add_argument("--mc-simulations", type=int, default=5_000)
@@ -57,6 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     gate = ValidationGate(
         min_trades=args.min_validation_trades,
         min_expectancy=args.min_validation_expectancy,
+        min_locked_test_trades=args.min_locked_test_trades,
     )
 
     experiment = run_research_experiment(
