@@ -14,7 +14,10 @@ def test_strategy_family_grid_sizes_are_explicit_and_stable():
     assert get_strategy_family("trend_pullback").grid_size == 288
     assert get_strategy_family("range_reversion").grid_size == 288
     assert get_strategy_family("breakout").grid_size == 192
-    assert sum(family.grid_size for family in FAMILIES.values()) == 768
+    assert get_strategy_family("htf_aligned_pullback").grid_size == 72
+    assert get_strategy_family("compression_breakout").grid_size == 32
+    assert get_strategy_family("sweep_reversal").grid_size == 48
+    assert sum(family.grid_size for family in FAMILIES.values()) == 920
 
 
 def test_matrix_cli_exposes_all_strategy_families():
