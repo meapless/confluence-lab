@@ -32,10 +32,14 @@ def score_metrics(
     *,
     objective: str = "expectancy",
     min_trades: int = 30,
+    min_expectancy: float | None = None,
 ) -> float:
-    """Score a backtest without allowing tiny samples to rank as winners."""
+    """Score a backtest while enforcing minimum evidence constraints."""
     if metrics.trades < min_trades:
         return float("-inf")
+    if min_expectancy is not None:
+        if metrics.expectancy is None or metrics.expectancy <= min_expectancy:
+            return float("-inf")
     if objective == "expectancy":
         return float(metrics.expectancy) if metrics.expectancy is not None else float("-inf")
     if objective == "win_rate":
@@ -53,6 +57,7 @@ def grid_search(
     config: BacktestConfig | None = None,
     objective: str = "expectancy",
     min_trades: int = 30,
+    min_expectancy: float | None = None,
 ) -> list[CandidateResult]:
     """Search only the frame supplied by the caller.
 
@@ -63,6 +68,11 @@ def grid_search(
     candidates: list[CandidateResult] = []
     for params in iter_parameter_grid(parameter_grid):
         result = run_backtest(frame, builder(params), config)
-        score = score_metrics(result.metrics, objective=objective, min_trades=min_trades)
+        score = score_metrics(
+            result.metrics,
+            objective=objective,
+            min_trades=min_trades,
+            min_expectancy=min_expectancy,
+        )
         candidates.append(CandidateResult(params=params, metrics=result.metrics, score=score))
     return sorted(candidates, key=lambda candidate: candidate.score, reverse=True)
