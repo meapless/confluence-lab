@@ -52,6 +52,7 @@ class PublicBenchmarkPolicy:
     expiries: tuple[int, ...] = (1, 2, 3, 5)
     search_objective: str = "wilson_low"
     min_development_trades: int = 30
+    min_development_expectancy: float | None = 0.0
     min_validation_trades: int = 30
     min_locked_test_trades: int = 30
     require_validation_wilson_above_break_even: bool = True
@@ -212,6 +213,7 @@ def run_public_benchmark(
             variants,
             objective=policy.search_objective,
             search_min_trades=policy.min_development_trades,
+            search_min_expectancy=policy.min_development_expectancy,
             gate=gate,
             prepared_factory=family.prepared_factory,
         )
@@ -285,6 +287,7 @@ def run_public_benchmark(
             "locked_test_fraction": 0.20,
             "search_objective": policy.search_objective,
             "minimum_development_trades": policy.min_development_trades,
+            "minimum_development_expectancy": policy.min_development_expectancy,
             "minimum_validation_trades": gate.min_trades,
             "minimum_locked_test_trades": gate.min_locked_test_trades,
             "validation_requires_positive_expectancy": True,
