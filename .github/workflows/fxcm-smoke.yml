@@ -1,0 +1,49 @@
+name: FXCM Data Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/fxcm-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: Verify one real FXCM EURUSD week
+        run: |
+          python - <<'PY'
+          from confluence_lab.data import diagnose_dataset
+          from confluence_lab.fxcm import download_fxcm_week
+
+          frame, provenance = download_fxcm_week("EURUSD", 2020, 1, price_side="mid")
+          if provenance is None or frame.empty:
+              raise SystemExit("FXCM week 1/2020 returned no data")
+          d = diagnose_dataset(frame)
+          print("url:", provenance.url)
+          print("downloaded_bytes:", provenance.downloaded_bytes)
+          print("sha256:", provenance.sha256)
+          print("rows:", len(frame))
+          print("start:", frame.iloc[0]["timestamp"])
+          print("end:", frame.iloc[-1]["timestamp"])
+          print("columns:", list(frame.columns))
+          print("first_close:", frame.iloc[0]["close"])
+          print("first_spread_proxy:", frame.iloc[0]["spread_mean_proxy"])
+          print("diagnostics:", d)
+          PY
