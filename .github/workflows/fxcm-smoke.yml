@@ -26,16 +26,50 @@ jobs:
       - name: Install
         run: python -m pip install -e ".[dev]"
 
-      - name: Verify one real FXCM EURUSD week
+      - name: Probe and parse real FXCM EURUSD weeks
         run: |
           python - <<'PY'
-          from confluence_lab.data import diagnose_dataset
-          from confluence_lab.fxcm import download_fxcm_week
+          from urllib.error import HTTPError
+          from urllib.request import Request, urlopen
 
-          frame, provenance = download_fxcm_week("EURUSD", 2020, 1, price_side="mid")
+          from confluence_lab.data import diagnose_dataset
+          from confluence_lab.fxcm import download_fxcm_week, fxcm_week_url
+
+          candidates = [
+              (2017, 29),  # concrete example in FXCM's public sample code
+              (2018, 1),
+              (2019, 26),
+              (2020, 1),
+              (2020, 26),
+              (2020, 52),
+          ]
+
+          live = None
+          for year, week in candidates:
+              url = fxcm_week_url("EURUSD", year, week)
+              request = Request(url, method="HEAD", headers={"User-Agent": "ConfluenceLab/0.4"})
+              try:
+                  with urlopen(request, timeout=15) as response:
+                      code = response.status
+              except HTTPError as exc:
+                  code = exc.code
+              except Exception as exc:
+                  print("probe", year, week, "error=", repr(exc))
+                  continue
+              print("probe", year, week, "status=", code, "url=", url)
+              if code == 200 and live is None:
+                  live = (year, week)
+
+          if live is None:
+              raise SystemExit("No probed FXCM weekly archive file is currently reachable")
+
+          year, week = live
+          frame, provenance = download_fxcm_week("EURUSD", year, week, price_side="mid")
           if provenance is None or frame.empty:
-              raise SystemExit("FXCM week 1/2020 returned no data")
+              raise SystemExit(f"FXCM week {week}/{year} probed live but failed to download/parse")
           d = diagnose_dataset(frame)
+          print("selected_year:", year)
+          print("selected_week:", week)
           print("url:", provenance.url)
           print("downloaded_bytes:", provenance.downloaded_bytes)
           print("sha256:", provenance.sha256)
