@@ -1,19 +1,30 @@
+from pathlib import Path
+import runpy
+
 from confluence_lab.families import (
     COMPRESSION_BREAKOUT_GRID,
     HTF_ALIGNED_PULLBACK_GRID,
     SWEEP_REVERSAL_GRID,
     get_strategy_family,
 )
-from scripts.run_fxcm_2018_range_replication import FROZEN_PARAMS, PAYOUT
+
+
+def _replication_script_globals():
+    path = Path(__file__).resolve().parents[1] / "scripts" / "run_fxcm_2018_range_replication.py"
+    return runpy.run_path(str(path))
 
 
 def test_frozen_2019_range_candidate_matches_preregistration():
-    assert FROZEN_PARAMS.adx_max == 30.0
-    assert FROZEN_PARAMS.rsi_lower == 25.0
-    assert FROZEN_PARAMS.rsi_upper == 65.0
-    assert FROZEN_PARAMS.band_buffer_atr == 0.10
-    assert FROZEN_PARAMS.atr_pct_max == 0.70
-    assert PAYOUT == 0.82
+    values = _replication_script_globals()
+    frozen = values["FROZEN_PARAMS"]
+    payout = values["PAYOUT"]
+
+    assert frozen.adx_max == 30.0
+    assert frozen.rsi_lower == 25.0
+    assert frozen.rsi_upper == 65.0
+    assert frozen.band_buffer_atr == 0.10
+    assert frozen.atr_pct_max == 0.70
+    assert payout == 0.82
 
 
 def test_v2_search_budget_matches_preregistration():
