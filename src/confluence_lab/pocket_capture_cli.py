@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .data import dataframe_fingerprint, diagnose_dataset
 from .pocket import PocketResearchAdapter
+from .pocket_store import append_snapshot_manifest, make_snapshot_manifest_entry
 
 
 def _write_frame(frame, path: Path) -> None:
@@ -40,6 +41,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--payout-log",
         default="data/raw/pocket/payout_observations.jsonl",
         help="Append-only JSONL file for timestamped payout observations",
+    )
+    parser.add_argument(
+        "--manifest",
+        default="data/raw/pocket/snapshot_manifest.jsonl",
+        help="Append-only JSONL manifest describing every captured candle snapshot",
     )
     parser.add_argument(
         "--live-account",
@@ -83,14 +89,27 @@ async def _capture(args: argparse.Namespace) -> dict[str, object]:
 
     payout_log = Path(args.payout_log)
     payout_log.parent.mkdir(parents=True, exist_ok=True)
+    account_mode = "live" if args.live_account else "demo"
     payout_observation = {
         "asset": args.asset,
         "observed_at": observed_at.isoformat(),
         "payout": current_payout,
-        "account_mode": "live" if args.live_account else "demo",
+        "account_mode": account_mode,
     }
     with payout_log.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(payout_observation, sort_keys=True) + "\n")
+
+    manifest_arg = getattr(args, "manifest", None)
+    manifest_path = Path(manifest_arg) if manifest_arg else output.parent / "snapshot_manifest.jsonl"
+    manifest_entry = make_snapshot_manifest_entry(
+        candles,
+        asset=args.asset,
+        period_seconds=args.period_seconds,
+        observed_at=observed_at,
+        account_mode=account_mode,
+        relative_path=str(output),
+    )
+    append_snapshot_manifest(manifest_path, manifest_entry)
 
     diagnostics = diagnose_dataset(candles)
     metadata = {
@@ -98,11 +117,12 @@ async def _capture(args: argparse.Namespace) -> dict[str, object]:
         "asset": args.asset,
         "period_seconds": args.period_seconds,
         "duration_seconds_requested": args.duration_seconds,
-        "account_mode": "live" if args.live_account else "demo",
+        "account_mode": account_mode,
         "candle_rows": len(candles),
         "candle_fingerprint": dataframe_fingerprint(candles),
         "diagnostics": asdict(diagnostics),
         "payout_observation": payout_observation,
+        "snapshot_manifest_entry": asdict(manifest_entry),
         "historical_payout_backfill": False,
         "credential_persisted": False,
     }
@@ -115,6 +135,8 @@ async def _capture(args: argparse.Namespace) -> dict[str, object]:
         "candles": str(output),
         "metadata": str(metadata_path),
         "payout_log": str(payout_log),
+        "manifest": str(manifest_path),
+        "snapshot_id": manifest_entry.snapshot_id,
         "rows": len(candles),
         "fingerprint": metadata["candle_fingerprint"],
         "payout_observed_at": payout_observation["observed_at"],
