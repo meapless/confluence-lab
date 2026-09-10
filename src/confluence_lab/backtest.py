@@ -2,13 +2,26 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
+import numpy as np
 import pandas as pd
 
 from .metrics import PerformanceMetrics, calculate_metrics
-from .payouts import TiePolicy, break_even_win_rate, settle_binary_trade
+from .payouts import TiePolicy, break_even_win_rate
 from .strategies import SignalFunction
 
 _REQUIRED_COLUMNS = {"timestamp", "open", "high", "low", "close"}
+_TRADE_COLUMNS = [
+    "signal_timestamp",
+    "entry_timestamp",
+    "exit_timestamp",
+    "direction",
+    "entry_price",
+    "exit_price",
+    "payout",
+    "break_even_win_rate",
+    "result",
+    "pnl",
+]
 
 
 @dataclass(frozen=True)
@@ -26,8 +39,12 @@ class BacktestConfig:
             raise ValueError("expiry_bars must be >= 1")
         if self.entry_offset_bars < 1:
             raise ValueError("entry_offset_bars must be >= 1 to avoid same-bar execution assumptions")
+        if not 0 <= self.fixed_payout <= 10:
+            raise ValueError("fixed_payout must be a decimal return, e.g. 0.82 for 82%")
         if self.min_payout is not None and not 0 <= self.min_payout <= 10:
             raise ValueError("min_payout must be a decimal return, e.g. 0.82 for 82%")
+        if self.stake <= 0:
+            raise ValueError("stake must be positive")
 
 
 @dataclass(frozen=True)
@@ -48,6 +65,7 @@ def _validate_frame(frame: pd.DataFrame, config: BacktestConfig) -> pd.DataFrame
         raise ValueError(f"missing required columns: {sorted(missing)}")
     if config.payout_column and config.payout_column not in frame.columns:
         raise ValueError(f"payout column {config.payout_column!r} not found")
+
     ordered = frame.sort_values("timestamp", kind="stable").reset_index(drop=True).copy()
     if ordered["timestamp"].duplicated().any():
         raise ValueError("duplicate timestamps are not allowed")
@@ -58,6 +76,117 @@ def _validate_frame(frame: pd.DataFrame, config: BacktestConfig) -> pd.DataFrame
     return ordered
 
 
+def _empty_result(config: BacktestConfig) -> BacktestResult:
+    trades = pd.DataFrame(columns=_TRADE_COLUMNS)
+    return BacktestResult(trades=trades, metrics=calculate_metrics(trades), config=config)
+
+
+def _run_on_validated(
+    data: pd.DataFrame,
+    signal: pd.Series,
+    config: BacktestConfig,
+) -> BacktestResult:
+    """Vectorized settlement for a prevalidated, ordered frame and signal series."""
+    if not signal.index.equals(data.index):
+        signal = signal.reindex(data.index)
+
+    raw_signal = pd.to_numeric(signal, errors="coerce").to_numpy(dtype=float)
+    signal_indices = np.flatnonzero(np.isfinite(raw_signal) & (raw_signal != 0))
+    if not len(signal_indices):
+        return _empty_result(config)
+
+    directions = raw_signal[signal_indices].astype(np.int8)
+    if not np.isin(directions, [-1, 1]).all():
+        raise ValueError("strategy produced direction outside {-1, 0, 1}")
+
+    entry_indices = signal_indices + config.entry_offset_bars
+    exit_indices = entry_indices + config.expiry_bars - 1
+    in_bounds = (entry_indices < len(data)) & (exit_indices < len(data))
+    signal_indices = signal_indices[in_bounds]
+    entry_indices = entry_indices[in_bounds]
+    exit_indices = exit_indices[in_bounds]
+    directions = directions[in_bounds]
+    if not len(signal_indices):
+        return _empty_result(config)
+
+    open_values = data["open"].to_numpy(dtype=float)
+    close_values = data["close"].to_numpy(dtype=float)
+    entry_prices = open_values[entry_indices]
+    exit_prices = close_values[exit_indices]
+
+    if config.payout_column:
+        payout_values = pd.to_numeric(
+            data[config.payout_column], errors="coerce"
+        ).to_numpy(dtype=float)
+        payouts = payout_values[entry_indices]
+    else:
+        payouts = np.full(len(entry_indices), config.fixed_payout, dtype=float)
+
+    if not np.isfinite(payouts).all() or ((payouts < 0) | (payouts > 10)).any():
+        raise ValueError("payout values must be finite decimal returns between 0 and 10")
+
+    if config.min_payout is not None:
+        eligible = payouts >= config.min_payout
+        signal_indices = signal_indices[eligible]
+        entry_indices = entry_indices[eligible]
+        exit_indices = exit_indices[eligible]
+        directions = directions[eligible]
+        entry_prices = entry_prices[eligible]
+        exit_prices = exit_prices[eligible]
+        payouts = payouts[eligible]
+        if not len(signal_indices):
+            return _empty_result(config)
+
+    signed_delta = directions * (exit_prices - entry_prices)
+    win = signed_delta > 0
+    loss = signed_delta < 0
+    tie = ~(win | loss)
+
+    results = np.full(len(signed_delta), "tie", dtype=object)
+    results[win] = "win"
+    results[loss] = "loss"
+    pnl = np.zeros(len(signed_delta), dtype=float)
+    pnl[win] = config.stake * payouts[win]
+    pnl[loss] = -config.stake
+
+    tie_policy = TiePolicy(config.tie_policy)
+    if tie_policy is TiePolicy.LOSS:
+        results[tie] = "loss"
+        pnl[tie] = -config.stake
+    elif tie_policy is TiePolicy.WIN:
+        results[tie] = "win"
+        pnl[tie] = config.stake * payouts[tie]
+
+    timestamps = data["timestamp"].to_numpy()
+    trades = pd.DataFrame(
+        {
+            "signal_timestamp": timestamps[signal_indices],
+            "entry_timestamp": timestamps[entry_indices],
+            "exit_timestamp": timestamps[exit_indices],
+            "direction": directions,
+            "entry_price": entry_prices,
+            "exit_price": exit_prices,
+            "payout": payouts,
+            "break_even_win_rate": 1.0 / (1.0 + payouts),
+            "result": results,
+            "pnl": pnl,
+        },
+        columns=_TRADE_COLUMNS,
+    )
+    return BacktestResult(trades=trades, metrics=calculate_metrics(trades), config=config)
+
+
+def run_backtest_signals(
+    frame: pd.DataFrame,
+    signal: pd.Series,
+    config: BacktestConfig | None = None,
+) -> BacktestResult:
+    """Backtest an already-generated signal series."""
+    config = config or BacktestConfig()
+    data = _validate_frame(frame, config)
+    return _run_on_validated(data, signal, config)
+
+
 def run_backtest(
     frame: pd.DataFrame,
     strategy: SignalFunction,
@@ -66,74 +195,4 @@ def run_backtest(
     config = config or BacktestConfig()
     data = _validate_frame(frame, config)
     signal = strategy(data.copy())
-    if not signal.index.equals(data.index):
-        signal = signal.reindex(data.index)
-
-    records: list[dict[str, object]] = []
-    for signal_index, direction_value in signal.items():
-        if pd.isna(direction_value):
-            continue
-        direction = int(direction_value)
-        if direction == 0:
-            continue
-        if direction not in (-1, 1):
-            raise ValueError("strategy produced direction outside {-1, 0, 1}")
-
-        entry_index = int(signal_index) + config.entry_offset_bars
-        exit_index = entry_index + config.expiry_bars - 1
-        if entry_index >= len(data) or exit_index >= len(data):
-            continue
-
-        entry = data.iloc[entry_index]
-        exit_row = data.iloc[exit_index]
-        payout = (
-            float(entry[config.payout_column])
-            if config.payout_column
-            else config.fixed_payout
-        )
-        if config.min_payout is not None and payout < config.min_payout:
-            continue
-
-        result, pnl = settle_binary_trade(
-            direction=direction,
-            entry_price=float(entry["open"]),
-            exit_price=float(exit_row["close"]),
-            payout=payout,
-            stake=config.stake,
-            tie_policy=config.tie_policy,
-        )
-        records.append(
-            {
-                "signal_timestamp": data.iloc[int(signal_index)]["timestamp"],
-                "entry_timestamp": entry["timestamp"],
-                "exit_timestamp": exit_row["timestamp"],
-                "direction": direction,
-                "entry_price": float(entry["open"]),
-                "exit_price": float(exit_row["close"]),
-                "payout": payout,
-                "break_even_win_rate": break_even_win_rate(payout),
-                "result": result,
-                "pnl": pnl,
-            }
-        )
-
-    trades = pd.DataFrame.from_records(
-        records,
-        columns=[
-            "signal_timestamp",
-            "entry_timestamp",
-            "exit_timestamp",
-            "direction",
-            "entry_price",
-            "exit_price",
-            "payout",
-            "break_even_win_rate",
-            "result",
-            "pnl",
-        ],
-    )
-    return BacktestResult(
-        trades=trades,
-        metrics=calculate_metrics(trades),
-        config=config,
-    )
+    return _run_on_validated(data, signal, config)
