@@ -3,6 +3,7 @@ import pandas as pd
 from confluence_lab.backtest import BacktestConfig
 from confluence_lab.experiments import ValidationGate, run_research_experiment
 from confluence_lab.optimization import grid_search, iter_parameter_grid
+from confluence_lab.registry import append_experiment_record, read_registry, verify_registry
 from confluence_lab.robustness import monte_carlo_trades
 from confluence_lab.synthetic import generate_synthetic_ohlc
 from confluence_lab.walkforward import WalkForwardConfig, walk_forward
@@ -82,3 +83,20 @@ def test_walk_forward_does_not_run_when_insufficient_rows():
         config=WalkForwardConfig(train_bars=80, test_bars=30, min_trades=1),
     )
     assert output.empty
+
+
+def test_registry_is_append_only_hash_chain(tmp_path):
+    path = tmp_path / "registry.jsonl"
+    first = append_experiment_record(path, {"dataset": "abc", "score": 1})
+    second = append_experiment_record(path, {"dataset": "def", "score": 2})
+    assert second["previous_hash"] == first["record_hash"]
+    assert len(read_registry(path)) == 2
+    assert verify_registry(path)
+
+
+def test_registry_detects_tampering(tmp_path):
+    path = tmp_path / "registry.jsonl"
+    append_experiment_record(path, {"dataset": "abc", "score": 1})
+    text = path.read_text(encoding="utf-8").replace('"score": 1', '"score": 999')
+    path.write_text(text, encoding="utf-8")
+    assert not verify_registry(path)
