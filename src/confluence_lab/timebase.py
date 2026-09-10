@@ -70,12 +70,14 @@ def contiguous_horizon_mask(
         else infer_bar_interval(timestamps)
     )
     if interval is None:
-        return starts.eq(ends) if hasattr(starts, "eq") else starts == ends
+        return starts == ends
     if interval <= pd.Timedelta(0):
         raise ValueError("expected_interval must be positive")
 
-    timestamp_ns = timestamps.astype("int64").to_numpy()
-    good_step = np.diff(timestamp_ns) == int(interval.value)
+    # Compare Timedelta values directly instead of integer datetime storage.
+    # Pandas may store datetimes internally at different resolutions across
+    # versions, while Timedelta equality remains unit-safe.
+    good_step = timestamps.diff().iloc[1:].eq(interval).to_numpy(dtype=bool)
     bad_prefix = np.concatenate(
         [np.array([0], dtype=int), np.cumsum(~good_step, dtype=int)]
     )
