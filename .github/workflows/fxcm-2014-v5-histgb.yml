@@ -1,0 +1,49 @@
+name: FXCM EURUSD 2014 V5 HistGradientBoosting
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "research/hypotheses/v5-histgradientboosting-preregistration.md"
+      - "src/confluence_lab/ml_v5.py"
+      - "src/confluence_lab/ml_v5_experiment.py"
+      - "tests/test_ml_v5.py"
+      - "scripts/run_fxcm_2014_v5_histgb.py"
+      - ".github/workflows/fxcm-2014-v5-histgb.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: Verify research tests
+        run: pytest
+
+      - name: Run preregistered V5 benchmark
+        run: >-
+          python scripts/run_fxcm_2014_v5_histgb.py
+          --output benchmark-results/fxcm-eurusd-m1-2014-v5-histgb.json
+
+      - name: Upload V5 report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fxcm-eurusd-2014-v5-histgb
+          path: benchmark-results/fxcm-eurusd-m1-2014-v5-histgb.json
+          if-no-files-found: error
+          retention-days: 30
