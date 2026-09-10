@@ -93,16 +93,24 @@ def performance_by_direction(trades: pd.DataFrame) -> pd.DataFrame:
 def performance_by_period(
     trades: pd.DataFrame,
     *,
-    frequency: str = "ME",
+    frequency: str = "M",
 ) -> pd.DataFrame:
-    """Report stability by entry-time period without changing strategy rules."""
+    """Report stability by entry-time period without changing strategy rules.
+
+    ``Period`` uses aliases such as ``M`` for calendar month. Pandas 3 rejects
+    the resampling-oriented ``ME`` alias here, so callers should pass Period-
+    compatible frequency strings.
+    """
     if trades.empty:
         return pd.DataFrame()
     if "entry_timestamp" not in trades.columns:
         raise ValueError("trades missing entry_timestamp column")
     frame = trades.copy()
     frame["entry_timestamp"] = pd.to_datetime(frame["entry_timestamp"], utc=True)
-    frame["period"] = frame["entry_timestamp"].dt.to_period(frequency)
+    # Periods themselves are timezone-naive labels. Convert explicitly rather
+    # than relying on pandas to drop timezone information implicitly.
+    naive_utc = frame["entry_timestamp"].dt.tz_convert("UTC").dt.tz_localize(None)
+    frame["period"] = naive_utc.dt.to_period(frequency)
     rows: list[dict[str, object]] = []
     for period, subset in frame.groupby("period", sort=True):
         rows.append({"period": str(period), **asdict(calculate_metrics(subset))})
