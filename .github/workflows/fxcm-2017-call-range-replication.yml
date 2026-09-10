@@ -6,6 +6,7 @@ on:
     paths:
       - "scripts/__init__.py"
       - "scripts/run_fxcm_2017_call_range_replication.py"
+      - "tests/test_preregistered_protocol.py"
       - ".github/workflows/fxcm-2017-call-range-replication.yml"
 
 permissions:
