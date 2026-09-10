@@ -24,6 +24,7 @@ confluence-matrix-search = "confluence_lab.matrix_cli:main"
 confluence-fetch-fx = "confluence_lab.fx_cli:main"
 confluence-pocket-capture = "confluence_lab.pocket_capture_cli:main"
 confluence-pocket-consolidate = "confluence_lab.pocket_consolidate_cli:main"
+confluence-pocket-watch = "confluence_lab.pocket_watch_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
