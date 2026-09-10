@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
+      - "scripts/__init__.py"
       - "scripts/run_fxcm_2017_call_range_replication.py"
       - ".github/workflows/fxcm-2017-call-range-replication.yml"
 
