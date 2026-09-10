@@ -63,13 +63,11 @@ class TrendPullbackParams:
             raise ValueError("rsi_trigger must be between 0 and 100")
 
 
-def trend_pullback(
-    frame: pd.DataFrame,
+def trend_pullback_from_features(
+    features: pd.DataFrame,
     params: TrendPullbackParams = TrendPullbackParams(),
 ) -> pd.Series:
-    features = add_core_features(frame)
-    signal = pd.Series(0, index=frame.index, dtype="int8")
-
+    signal = pd.Series(0, index=features.index, dtype="int8")
     common = (
         features["adx_14"].ge(params.adx_min)
         & features["atr_percentile_100"].between(params.atr_pct_min, params.atr_pct_max)
@@ -98,6 +96,23 @@ def trend_pullback(
     signal.loc[bull] = 1
     signal.loc[bear] = -1
     return signal
+
+
+def trend_pullback(
+    frame: pd.DataFrame,
+    params: TrendPullbackParams = TrendPullbackParams(),
+) -> pd.Series:
+    return trend_pullback_from_features(add_core_features(frame), params)
+
+
+def prepare_trend_pullback(frame: pd.DataFrame):
+    """Prepare core indicators once, then cheaply evaluate many parameter sets."""
+    features = add_core_features(frame)
+
+    def prepared(params: dict[str, float]) -> pd.Series:
+        return trend_pullback_from_features(features, TrendPullbackParams(**params))
+
+    return prepared
 
 
 def trend_pullback_v1(frame: pd.DataFrame) -> pd.Series:
