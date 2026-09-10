@@ -18,6 +18,12 @@ from .splits import chronological_split
 
 
 @dataclass(frozen=True)
+class ExpirySearchResult:
+    expiry_bars: int
+    research: LogisticResearchResult
+
+
+@dataclass(frozen=True)
 class MLCandidate:
     expiry_bars: int
     threshold: float
@@ -37,6 +43,7 @@ class MLExperimentResult:
     validation: BacktestResult | None
     locked_test: BacktestResult | None
     development_candidates: tuple[MLCandidate, ...]
+    development_searches: tuple[ExpirySearchResult, ...]
 
 
 def _ordered(frame: pd.DataFrame) -> pd.DataFrame:
@@ -111,6 +118,7 @@ def run_logistic_experiment(
     Development threshold selection uses only OOF probabilities. One candidate
     is frozen across expiry/threshold choices. Validation and locked slices are
     prediction-only: the selected development-fitted model is never retrained.
+    Every expiry search is retained so rejected thresholds remain auditable.
     """
     split = chronological_split(_ordered(frame))
     development = _ordered(split.development)
@@ -118,15 +126,18 @@ def run_logistic_experiment(
     locked_frame = _ordered(split.test)
 
     candidates: list[MLCandidate] = []
+    searches: list[ExpirySearchResult] = []
+    frozen_thresholds = tuple(float(value) for value in thresholds)
     for expiry in tuple(int(value) for value in expiries):
         research = fit_logistic_research_baseline(
             development,
             expiry_bars=expiry,
             fixed_payout=fixed_payout,
-            thresholds=tuple(float(value) for value in thresholds),
+            thresholds=frozen_thresholds,
             n_splits=development_oof_splits,
             min_oof_trades=minimum_development_trades,
         )
+        searches.append(ExpirySearchResult(expiry_bars=expiry, research=research))
         if research.selected_threshold is None or research.development_oof_result is None:
             continue
         candidates.append(
@@ -145,6 +156,7 @@ def run_logistic_experiment(
             validation=None,
             locked_test=None,
             development_candidates=(),
+            development_searches=tuple(searches),
         )
 
     # Highest Wilson lower bound wins. Exact ties: lower expiry, then higher
@@ -173,6 +185,7 @@ def run_logistic_experiment(
             validation=validation,
             locked_test=None,
             development_candidates=tuple(candidates),
+            development_searches=tuple(searches),
         )
 
     locked = evaluate_model_slice(
@@ -193,4 +206,5 @@ def run_logistic_experiment(
         validation=validation,
         locked_test=locked,
         development_candidates=tuple(candidates),
+        development_searches=tuple(searches),
     )
