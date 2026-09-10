@@ -24,7 +24,7 @@ export POCKET_SSID="<your-session-value>"
 
 The capture metadata and snapshot manifest deliberately do not persist this value.
 
-## 2. Capture a snapshot
+## 2. Capture one snapshot
 
 Example:
 
@@ -44,7 +44,36 @@ Each capture writes three independent evidence streams:
 
 The payout observed during a capture is **not backfilled** across the returned historical candles.
 
-## 3. Why repeated snapshots are required
+## 3. Run a bounded observation session
+
+For useful payout-aware research, use the bounded observer instead of manually repeating captures.
+
+Example six-hour demo-account collection across four OTC pairs:
+
+```bash
+confluence-pocket-watch \
+  EURUSD_otc GBPUSD_otc USDJPY_otc EURGBP_otc \
+  --period-seconds 60 \
+  --interval-seconds 60 \
+  --duration-hours 6 \
+  --snapshot-every 15 \
+  --snapshot-duration-seconds 3600
+```
+
+That configuration:
+
+- records one current payout observation per asset every 60 seconds;
+- captures a recent one-hour candle snapshot every 15 cycles;
+- stores every snapshot in the append-only manifest;
+- automatically stops after the requested duration;
+- uses the demo account unless `--live-account` is explicitly supplied;
+- never writes `POCKET_SSID` into the data or metadata.
+
+For a controlled short run, `--iterations N` overrides `--duration-hours`.
+
+The observer rejects polling intervals below 10 seconds. Faster polling is unnecessary for the initial minute-level research design and adds avoidable load.
+
+## 4. Why repeated snapshots are required
 
 A single call can retrieve older candles, but `get_payout()` gives a current payout observation. To perform realistic payout-aware Pocket research, payout must be observed repeatedly through time.
 
@@ -57,7 +86,7 @@ Pocket current get_payout()       -> timestamped payout observation
 
 Do not merge the current payout backward across a day of candles.
 
-## 4. Overlapping captures are expected
+## 5. Overlapping captures are expected
 
 Repeated historical requests will often contain many of the same candles. Confluence Lab records every raw snapshot but consolidates research data deterministically:
 
@@ -76,7 +105,7 @@ Default behavior:
 
 An explicit `--conflict-policy prefer_last` mode exists only for deliberate repair/investigation. Do not use it silently for research evidence.
 
-## 5. Payout alignment rule
+## 6. Payout alignment rule
 
 The library function `align_payouts_backward()` attaches only the latest payout observation at or before an event timestamp.
 
@@ -93,7 +122,7 @@ payout observed 11:55:00 -> stale, rejected
 
 A trade with no sufficiently recent observed payout must remain payout-unknown rather than receiving a fabricated value.
 
-## 6. Suggested initial capture targets
+## 7. Suggested initial capture targets
 
 For research, begin with a small, fixed universe rather than dozens of assets:
 
@@ -106,7 +135,7 @@ EURGBP_otc
 
 Also collect the corresponding regular pairs where Pocket exposes them. This allows later comparison between broker OTC behavior and ordinary market behavior without claiming equivalence.
 
-## 7. Data sufficiency
+## 8. Data sufficiency
 
 Do not begin strong strategy claims after one day of capture. The first Pocket-specific research milestone should span multiple weeks and different day/time conditions, with many timestamped payout observations.
 
@@ -123,13 +152,13 @@ Before a Pocket-specific candidate is considered interesting, verify at minimum:
 - chronological development/validation/locked-test behavior;
 - prospective demo forward testing.
 
-## 8. What the FXCM/Dukascopy results mean
+## 9. What the FXCM/Dukascopy results mean
 
 Regular-FX studies are useful for validating the research engine and testing whether a hypothesis has any general market structure behind it. They are **not** Pocket OTC backtests.
 
 Do not label an FXCM or Dukascopy result as Pocket Option performance.
 
-## 9. Security boundary
+## 10. Security boundary
 
 The expected architecture is:
 
