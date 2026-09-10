@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -34,7 +35,12 @@ def ema_crossover(frame: pd.DataFrame, fast: int = 10, slow: int = 30) -> pd.Ser
     return signal
 
 
-def rsi_reversal(frame: pd.DataFrame, period: int = 14, lower: float = 30, upper: float = 70) -> pd.Series:
+def rsi_reversal(
+    frame: pd.DataFrame,
+    period: int = 14,
+    lower: float = 30,
+    upper: float = 70,
+) -> pd.Series:
     values = rsi(frame["close"], period)
     signal = pd.Series(0, index=frame.index, dtype="int8")
     signal.loc[(values > lower) & (values.shift(1) <= lower)] = 1
@@ -42,15 +48,65 @@ def rsi_reversal(frame: pd.DataFrame, period: int = 14, lower: float = 30, upper
     return signal
 
 
-def trend_pullback_v1(frame: pd.DataFrame) -> pd.Series:
-    f = add_core_features(frame)
+@dataclass(frozen=True)
+class TrendPullbackParams:
+    adx_min: float = 20.0
+    atr_pct_min: float = 0.15
+    atr_pct_max: float = 0.90
+    ema_distance_atr: float = 0.45
+    rsi_trigger: float = 50.0
+
+    def __post_init__(self) -> None:
+        if self.atr_pct_min >= self.atr_pct_max:
+            raise ValueError("atr_pct_min must be below atr_pct_max")
+        if not 0 < self.rsi_trigger < 100:
+            raise ValueError("rsi_trigger must be between 0 and 100")
+
+
+def trend_pullback(
+    frame: pd.DataFrame,
+    params: TrendPullbackParams = TrendPullbackParams(),
+) -> pd.Series:
+    features = add_core_features(frame)
     signal = pd.Series(0, index=frame.index, dtype="int8")
-    common = f["adx_14"].ge(20) & f["atr_percentile_100"].between(0.15, 0.90) & f["distance_ema20_atr"].abs().le(0.45)
-    bull = common & f["ema_20"].gt(f["ema_50"]) & f["ema_50_slope"].gt(0) & f["rsi_14"].gt(50) & f["rsi_14"].shift(1).le(50) & f["macd_hist"].gt(f["macd_hist"].shift(1))
-    bear = common & f["ema_20"].lt(f["ema_50"]) & f["ema_50_slope"].lt(0) & f["rsi_14"].lt(50) & f["rsi_14"].shift(1).ge(50) & f["macd_hist"].lt(f["macd_hist"].shift(1))
+
+    common = (
+        features["adx_14"].ge(params.adx_min)
+        & features["atr_percentile_100"].between(params.atr_pct_min, params.atr_pct_max)
+        & features["distance_ema20_atr"].abs().le(params.ema_distance_atr)
+    )
+
+    bull = (
+        common
+        & features["ema_20"].gt(features["ema_50"])
+        & features["ema_50_slope"].gt(0)
+        & features["rsi_14"].gt(params.rsi_trigger)
+        & features["rsi_14"].shift(1).le(params.rsi_trigger)
+        & features["macd_hist"].gt(features["macd_hist"].shift(1))
+    )
+
+    bearish_trigger = 100.0 - params.rsi_trigger
+    bear = (
+        common
+        & features["ema_20"].lt(features["ema_50"])
+        & features["ema_50_slope"].lt(0)
+        & features["rsi_14"].lt(bearish_trigger)
+        & features["rsi_14"].shift(1).ge(bearish_trigger)
+        & features["macd_hist"].lt(features["macd_hist"].shift(1))
+    )
+
     signal.loc[bull] = 1
     signal.loc[bear] = -1
     return signal
+
+
+def trend_pullback_v1(frame: pd.DataFrame) -> pd.Series:
+    return trend_pullback(frame)
+
+
+def build_trend_pullback(params: dict[str, float]) -> SignalFunction:
+    config = TrendPullbackParams(**params)
+    return lambda frame: trend_pullback(frame, config)
 
 
 STRATEGIES: dict[str, SignalFunction] = {
