@@ -33,6 +33,8 @@ class BacktestConfig:
     min_payout: float | None = None
     stake: float = 1.0
     tie_policy: TiePolicy = TiePolicy.REFUND
+    allow_overlapping_positions: bool = True
+    cooldown_bars: int = 0
 
     def __post_init__(self) -> None:
         if self.expiry_bars < 1:
@@ -45,6 +47,8 @@ class BacktestConfig:
             raise ValueError("min_payout must be a decimal return, e.g. 0.82 for 82%")
         if self.stake <= 0:
             raise ValueError("stake must be positive")
+        if self.cooldown_bars < 0:
+            raise ValueError("cooldown_bars must be >= 0")
 
 
 @dataclass(frozen=True)
@@ -81,6 +85,27 @@ def _empty_result(config: BacktestConfig) -> BacktestResult:
     return BacktestResult(trades=trades, metrics=calculate_metrics(trades), config=config)
 
 
+def _non_overlapping_mask(
+    entry_indices: np.ndarray,
+    exit_indices: np.ndarray,
+    *,
+    cooldown_bars: int,
+) -> np.ndarray:
+    """Select candidates whose entry occurs after the prior accepted trade settles.
+
+    This intentionally operates in chronological order. A cooldown of zero
+    still requires the next entry bar to be strictly after the prior exit bar,
+    because an entry at a bar's open precedes settlement at that bar's close.
+    """
+    keep = np.zeros(len(entry_indices), dtype=bool)
+    last_exit = -1
+    for index, (entry, exit_) in enumerate(zip(entry_indices, exit_indices, strict=True)):
+        if int(entry) > last_exit + cooldown_bars:
+            keep[index] = True
+            last_exit = int(exit_)
+    return keep
+
+
 def _run_on_validated(
     data: pd.DataFrame,
     signal: pd.Series,
@@ -109,11 +134,6 @@ def _run_on_validated(
     if not len(signal_indices):
         return _empty_result(config)
 
-    open_values = data["open"].to_numpy(dtype=float)
-    close_values = data["close"].to_numpy(dtype=float)
-    entry_prices = open_values[entry_indices]
-    exit_prices = close_values[exit_indices]
-
     if config.payout_column:
         payout_values = pd.to_numeric(
             data[config.payout_column], errors="coerce"
@@ -131,11 +151,28 @@ def _run_on_validated(
         entry_indices = entry_indices[eligible]
         exit_indices = exit_indices[eligible]
         directions = directions[eligible]
-        entry_prices = entry_prices[eligible]
-        exit_prices = exit_prices[eligible]
         payouts = payouts[eligible]
         if not len(signal_indices):
             return _empty_result(config)
+
+    if not config.allow_overlapping_positions:
+        keep = _non_overlapping_mask(
+            entry_indices,
+            exit_indices,
+            cooldown_bars=config.cooldown_bars,
+        )
+        signal_indices = signal_indices[keep]
+        entry_indices = entry_indices[keep]
+        exit_indices = exit_indices[keep]
+        directions = directions[keep]
+        payouts = payouts[keep]
+        if not len(signal_indices):
+            return _empty_result(config)
+
+    open_values = data["open"].to_numpy(dtype=float)
+    close_values = data["close"].to_numpy(dtype=float)
+    entry_prices = open_values[entry_indices]
+    exit_prices = close_values[exit_indices]
 
     signed_delta = directions * (exit_prices - entry_prices)
     win = signed_delta > 0
