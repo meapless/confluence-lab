@@ -20,6 +20,8 @@ class ExecutionVariant:
     payout_column: str | None = None
     entry_offset_bars: int = 1
     stake: float = 1.0
+    allow_overlapping_positions: bool = True
+    cooldown_bars: int = 0
 
     def backtest_config(self) -> BacktestConfig:
         return BacktestConfig(
@@ -29,6 +31,8 @@ class ExecutionVariant:
             payout_column=self.payout_column,
             min_payout=self.min_payout,
             stake=self.stake,
+            allow_overlapping_positions=self.allow_overlapping_positions,
+            cooldown_bars=self.cooldown_bars,
         )
 
 
@@ -56,6 +60,7 @@ def grid_search_matrix(
     *,
     objective: str = "expectancy",
     min_trades: int = 30,
+    min_expectancy: float | None = None,
     prepared_factory: Callable[
         [pd.DataFrame], Callable[[dict[str, Any]], pd.Series]
     ] | None = None,
@@ -64,7 +69,8 @@ def grid_search_matrix(
 
     A strategy signal series is calculated once per strategy parameter set and
     reused across expiry/payout variants. Execution settings cannot influence
-    the historical signal itself.
+    the historical signal itself. Evidence eligibility is applied before
+    candidates are allowed to rank as development winners.
     """
     variants = list(execution_variants)
     if not variants:
@@ -82,6 +88,7 @@ def grid_search_matrix(
                 result.metrics,
                 objective=objective,
                 min_trades=min_trades,
+                min_expectancy=min_expectancy,
             )
             candidates.append(
                 MatrixCandidate(
@@ -103,12 +110,13 @@ def run_matrix_experiment(
     *,
     objective: str = "expectancy",
     search_min_trades: int = 30,
+    search_min_expectancy: float | None = None,
     gate: ValidationGate = ValidationGate(),
     prepared_factory: Callable[
         [pd.DataFrame], Callable[[dict[str, Any]], pd.Series]
     ] | None = None,
 ) -> MatrixExperimentResult:
-    """Tune strategy + expiry/payout settings without exposing the locked test."""
+    """Tune strategy + execution settings without exposing the locked test."""
     split = chronological_split(frame)
     ranked = grid_search_matrix(
         split.development,
@@ -117,6 +125,7 @@ def run_matrix_experiment(
         execution_variants,
         objective=objective,
         min_trades=search_min_trades,
+        min_expectancy=search_min_expectancy,
         prepared_factory=prepared_factory,
     )
     viable = [candidate for candidate in ranked if candidate.score != float("-inf")]
