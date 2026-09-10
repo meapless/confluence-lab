@@ -75,12 +75,14 @@ def test_pocket_capture_does_not_backfill_current_payout(monkeypatch, tmp_path):
     monkeypatch.setattr(pocket_capture_cli, "PocketResearchAdapter", FakeAdapter)
     output = tmp_path / "pocket.csv"
     payout_log = tmp_path / "payouts.jsonl"
+    manifest = tmp_path / "snapshot_manifest.jsonl"
     args = argparse.Namespace(
         asset="EURUSD_otc",
         period_seconds=60,
         duration_seconds=3600,
         output=str(output),
         payout_log=str(payout_log),
+        manifest=str(manifest),
         live_account=False,
     )
     result = asyncio.run(pocket_capture_cli._capture(args))
@@ -91,8 +93,15 @@ def test_pocket_capture_does_not_backfill_current_payout(monkeypatch, tmp_path):
     assert metadata["credential_persisted"] is False
     observation = json.loads(payout_log.read_text().strip())
     assert observation["payout"] == pytest.approx(0.92)
+    manifest_entry = json.loads(manifest.read_text().strip())
+    assert manifest_entry["asset"] == "EURUSD_otc"
+    assert manifest_entry["period_seconds"] == 60
+    assert manifest_entry["rows"] == 3
+    assert len(manifest_entry["snapshot_id"]) == 64
     assert "secret-session" not in output.with_suffix(".meta.json").read_text()
+    assert "secret-session" not in manifest.read_text()
     assert result["current_payout"] == pytest.approx(0.92)
+    assert result["snapshot_id"] == manifest_entry["snapshot_id"]
 
 
 def test_pocket_capture_requires_environment_credential(monkeypatch):
@@ -103,6 +112,7 @@ def test_pocket_capture_requires_environment_credential(monkeypatch):
         duration_seconds=3600,
         output=None,
         payout_log="unused.jsonl",
+        manifest="unused-manifest.jsonl",
         live_account=False,
     )
     with pytest.raises(SystemExit, match="POCKET_SSID"):
