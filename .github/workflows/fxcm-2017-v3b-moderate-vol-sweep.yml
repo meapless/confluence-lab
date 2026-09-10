@@ -1,0 +1,45 @@
+name: FXCM EURUSD 2017 V3B Moderate-Vol Sweep
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "research/hypotheses/v3b-moderate-vol-sweep-preregistration.md"
+      - "src/confluence_lab/hypotheses_v3.py"
+      - "tests/test_hypotheses_v3.py"
+      - "scripts/run_fxcm_2017_moderate_vol_sweep_replication.py"
+      - ".github/workflows/fxcm-2017-v3b-moderate-vol-sweep.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  replicate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: Verify research tests
+        run: pytest
+
+      - name: Run preregistered V3B replication
+        run: python scripts/run_fxcm_2017_moderate_vol_sweep_replication.py --output benchmark-results/fxcm-eurusd-m1-2017-v3b-moderate-vol-sweep.json
+
+      - name: Upload V3B report
+        uses: actions/upload-artifact@v4
+        with:
+          name: fxcm-eurusd-2017-v3b-moderate-vol-sweep
+          path: benchmark-results/fxcm-eurusd-m1-2017-v3b-moderate-vol-sweep.json
+          if-no-files-found: error
+          retention-days: 30
