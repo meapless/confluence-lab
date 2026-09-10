@@ -15,6 +15,7 @@ from .splits import chronological_split
 class ValidationGate:
     min_trades: int = 30
     min_expectancy: float = 0.0
+    min_locked_test_trades: int = 30
 
 
 @dataclass(frozen=True)
@@ -67,4 +68,11 @@ def run_research_experiment(
         return ExperimentResult(best, validation_metrics, None, "rejected_validation")
 
     test_metrics = run_backtest(split.test, strategy, config).metrics
+    if test_metrics.trades < gate.min_locked_test_trades:
+        return ExperimentResult(
+            best,
+            validation_metrics,
+            test_metrics,
+            "insufficient_locked_test",
+        )
     return ExperimentResult(best, validation_metrics, test_metrics, "tested")
