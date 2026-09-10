@@ -16,6 +16,7 @@ from confluence_lab.stress import payout_sensitivity, performance_by_period
 
 YEAR = 2017
 SYMBOL = "EURUSD"
+PROTOCOL_VERSION = "v3a-2017-call-only-range-1"
 PRIMARY_PAYOUT = 0.82
 PRIMARY_BREAK_EVEN = break_even_win_rate(PRIMARY_PAYOUT)
 PRIMARY_CONFIG = BacktestConfig(
@@ -89,11 +90,12 @@ def main(argv: list[str] | None = None) -> int:
     else:
         classification = "replicated_but_fragile"
 
-    monthly = performance_by_period(primary.trades, frequency="ME")
+    monthly = performance_by_period(primary.trades, frequency="M")
     monthly_records = monthly.astype(object).where(pd.notna(monthly), None).to_dict(orient="records")
 
     report = {
         "study_kind": "fresh_year_fixed_candidate_replication",
+        "protocol_version": PROTOCOL_VERSION,
         "preregistration": "research/hypotheses/v3a-call-only-range-preregistration.md",
         "interpretation_warning": (
             "This is regular FXCM EUR/USD midpoint data, not Pocket Option/OTC data. "
