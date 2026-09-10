@@ -11,6 +11,7 @@ from confluence_lab.ml import (
     fit_logistic_research_baseline,
     predict_probabilities,
     probability_to_signal,
+    select_probability_threshold,
 )
 from confluence_lab.synthetic import generate_synthetic_ohlc
 
@@ -26,13 +27,9 @@ def test_binary_direction_target_matches_next_bar_entry_and_expiry_close():
         }
     )
     target = binary_direction_target(frame, expiry_bars=2, entry_offset_bars=1)
-    # t0 enters at t1 open=10 and exits t2 close=9 => down.
     assert target.iloc[0] == 0.0
-    # t1 enters at t2 open=11 and exits t3 close=10 => down.
     assert target.iloc[1] == 0.0
-    # t2 enters at t3 open=9 and exits t4 close=8 => down.
     assert target.iloc[2] == 0.0
-    # t3 enters at t4 open=10 and exits t5 close=8 => down.
     assert target.iloc[3] == 0.0
     assert pd.isna(target.iloc[4])
     assert pd.isna(target.iloc[5])
@@ -83,6 +80,22 @@ def test_logistic_research_baseline_fits_without_assuming_profitability():
     probabilities = predict_probabilities(result.model, frame)
     assert probabilities.notna().sum() > 0
     assert probabilities.dropna().between(0.0, 1.0).all()
+
+
+def test_threshold_tie_prefers_higher_preregistered_confidence():
+    rows = 400
+    frame = generate_synthetic_ohlc(rows=rows, seed=204)
+    probabilities = pd.Series(np.where(np.arange(rows) % 2 == 0, 0.8, 0.2))
+    threshold, _, _ = select_probability_threshold(
+        frame,
+        probabilities,
+        config=BacktestConfig(expiry_bars=1, fixed_payout=0.82),
+        thresholds=(0.55, 0.60, 0.65),
+        objective="win_rate",
+        min_trades=1,
+        min_expectancy=None,
+    )
+    assert threshold == 0.65
 
 
 def test_probability_threshold_rejects_invalid_values():
