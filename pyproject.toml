@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "confluence-lab"
-version = "0.2.0"
+version = "0.3.0"
 description = "Evidence-driven research engine for payout-aware short-horizon trading strategies"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -15,6 +15,9 @@ dev = ["pytest>=8.0"]
 
 [project.scripts]
 confluence-search = "confluence_lab.cli:main"
+confluence-matrix-search = "confluence_lab.matrix_cli:main"
+confluence-fetch-fx = "confluence_lab.fx_cli:main"
+confluence-pocket-capture = "confluence_lab.pocket_capture_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
