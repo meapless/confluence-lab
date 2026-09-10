@@ -15,6 +15,7 @@ from .backtest import BacktestConfig, BacktestResult, run_backtest_signals
 from .context import add_research_context
 from .metrics import PerformanceMetrics
 from .optimization import score_metrics
+from .timebase import contiguous_horizon_mask
 
 
 ML_FEATURE_COLUMNS: tuple[str, ...] = (
@@ -130,28 +131,40 @@ def binary_direction_target(
     expiry_bars: int,
     entry_offset_bars: int = 1,
 ) -> pd.Series:
-    """Return future up/down target from the same settlement convention as backtests.
+    """Return a gap-safe future up/down target using backtest settlement semantics.
 
     Target values are 1.0 for an upward expiry, 0.0 for a downward expiry and
-    NaN for ties/out-of-bounds rows. NaN target rows are excluded from model
-    fitting only; they must not be excluded from prediction eligibility.
+    NaN for ties, out-of-bounds rows, or horizons that cross a timestamp gap.
+    Gap-crossing labels are invalid because an N-bar short-expiry trade must not
+    silently become an hours/days-long holding period across a closure.
+
+    NaN target rows are excluded from model fitting only; they must not be
+    excluded from prediction eligibility based on future outcome information.
     """
     if expiry_bars < 1:
         raise ValueError("expiry_bars must be >= 1")
     if entry_offset_bars < 1:
         raise ValueError("entry_offset_bars must be >= 1")
     data = _ordered(frame)
-    entry_index = np.arange(len(data)) + entry_offset_bars
+    signal_index = np.arange(len(data), dtype=int)
+    entry_index = signal_index + entry_offset_bars
     exit_index = entry_index + expiry_bars - 1
     target = np.full(len(data), np.nan, dtype=float)
-    valid = exit_index < len(data)
-    if valid.any():
-        entry = data["open"].to_numpy(dtype=float)[entry_index[valid]]
-        exit_ = data["close"].to_numpy(dtype=float)[exit_index[valid]]
-        delta = exit_ - entry
-        positions = np.flatnonzero(valid)
-        target[positions[delta > 0]] = 1.0
-        target[positions[delta < 0]] = 0.0
+    in_bounds = exit_index < len(data)
+    if in_bounds.any():
+        positions = np.flatnonzero(in_bounds)
+        contiguous = contiguous_horizon_mask(
+            data["timestamp"],
+            signal_index[positions],
+            exit_index[positions],
+        )
+        positions = positions[contiguous]
+        if len(positions):
+            entry = data["open"].to_numpy(dtype=float)[entry_index[positions]]
+            exit_ = data["close"].to_numpy(dtype=float)[exit_index[positions]]
+            delta = exit_ - entry
+            target[positions[delta > 0]] = 1.0
+            target[positions[delta < 0]] = 0.0
     return pd.Series(target, index=data.index, name="target_up")
 
 
@@ -221,9 +234,10 @@ def development_oof_probabilities(
 ) -> tuple[pd.Series, MLPreparedData]:
     """Generate expanding-window out-of-fold probabilities on development data.
 
-    Fold training excludes tie/out-of-bounds targets, but predictions are made
-    for every feature-valid row in the fold. This avoids the lookahead error of
-    deciding ex ante not to trade rows merely because they later settle as ties.
+    Fold training excludes tie/out-of-bounds/gap-crossing targets, but predictions
+    are made for every feature-valid row in the fold. This avoids the lookahead
+    error of deciding ex ante not to trade rows merely because of their future
+    settlement outcome.
     """
     if n_splits < 2:
         raise ValueError("n_splits must be >= 2")
