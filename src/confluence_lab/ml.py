@@ -74,9 +74,15 @@ class LogisticResearchResult:
     development_oof_result: BacktestResult | None
 
 
+def _ordered(frame: pd.DataFrame) -> pd.DataFrame:
+    if "timestamp" not in frame.columns:
+        raise ValueError("frame must contain timestamp")
+    return frame.sort_values("timestamp", kind="stable").reset_index(drop=True).copy()
+
+
 def build_ml_features(frame: pd.DataFrame) -> pd.DataFrame:
     """Build scale-aware, causal features for the interpretable V4 baseline."""
-    context = add_research_context(frame)
+    context = add_research_context(_ordered(frame))
     out = pd.DataFrame(index=context.index)
     close = context["close"].astype(float)
     atr = context["atr_14"].replace(0.0, np.nan).astype(float)
@@ -134,7 +140,7 @@ def binary_direction_target(
         raise ValueError("expiry_bars must be >= 1")
     if entry_offset_bars < 1:
         raise ValueError("entry_offset_bars must be >= 1")
-    data = frame.sort_values("timestamp", kind="stable").reset_index(drop=True)
+    data = _ordered(frame)
     entry_index = np.arange(len(data)) + entry_offset_bars
     exit_index = entry_index + expiry_bars - 1
     target = np.full(len(data), np.nan, dtype=float)
@@ -155,9 +161,10 @@ def prepare_ml_data(
     expiry_bars: int,
     entry_offset_bars: int = 1,
 ) -> MLPreparedData:
-    features = build_ml_features(frame)
+    data = _ordered(frame)
+    features = build_ml_features(data)
     target = binary_direction_target(
-        frame,
+        data,
         expiry_bars=expiry_bars,
         entry_offset_bars=entry_offset_bars,
     )
@@ -220,8 +227,9 @@ def development_oof_probabilities(
     """
     if n_splits < 2:
         raise ValueError("n_splits must be >= 2")
+    data = _ordered(frame)
     prepared = prepare_ml_data(
-        frame,
+        data,
         expiry_bars=expiry_bars,
         entry_offset_bars=entry_offset_bars,
     )
@@ -233,7 +241,7 @@ def development_oof_probabilities(
         n_splits=n_splits,
         gap=prepared.label_horizon_bars,
     )
-    probabilities = pd.Series(np.nan, index=frame.reset_index(drop=True).index, dtype=float)
+    probabilities = pd.Series(np.nan, index=data.index, dtype=float)
 
     for train_rel, test_rel in splitter.split(eligible_positions):
         train_positions = eligible_positions[train_rel]
@@ -266,13 +274,16 @@ def select_probability_threshold(
     min_trades: int = 200,
     min_expectancy: float | None = 0.0,
 ) -> tuple[float | None, tuple[ThresholdResult, ...], BacktestResult | None]:
+    data = _ordered(frame)
+    probs = pd.Series(probabilities.to_numpy(copy=True), index=data.index, dtype=float)
     results: list[ThresholdResult] = []
     best_result: BacktestResult | None = None
     best_threshold: float | None = None
     best_score = float("-inf")
     for threshold in thresholds:
-        signal = probability_to_signal(probabilities, threshold=float(threshold), index=frame.index)
-        backtest = run_backtest_signals(frame, signal, config)
+        threshold = float(threshold)
+        signal = probability_to_signal(probs, threshold=threshold, index=data.index)
+        backtest = run_backtest_signals(data, signal, config)
         score = score_metrics(
             backtest.metrics,
             objective=objective,
@@ -281,14 +292,21 @@ def select_probability_threshold(
         )
         results.append(
             ThresholdResult(
-                threshold=float(threshold),
+                threshold=threshold,
                 metrics=backtest.metrics,
                 score=score,
             )
         )
-        if score > best_score:
+        # Preregistered deterministic tie-break: when statistical score is
+        # identical, retain the higher (more selective) confidence threshold.
+        better_tie = (
+            score == best_score
+            and score != float("-inf")
+            and (best_threshold is None or threshold > best_threshold)
+        )
+        if score > best_score or better_tie:
             best_score = score
-            best_threshold = float(threshold)
+            best_threshold = threshold
             best_result = backtest
 
     if best_score == float("-inf"):
@@ -305,19 +323,20 @@ def fit_logistic_research_baseline(
     n_splits: int = 5,
     min_oof_trades: int = 200,
 ) -> LogisticResearchResult:
+    data = _ordered(development)
     config = BacktestConfig(
         expiry_bars=expiry_bars,
         entry_offset_bars=1,
         fixed_payout=fixed_payout,
     )
     probabilities, prepared = development_oof_probabilities(
-        development,
+        data,
         expiry_bars=expiry_bars,
         entry_offset_bars=1,
         n_splits=n_splits,
     )
     threshold, threshold_results, oof_result = select_probability_threshold(
-        development,
+        data,
         probabilities,
         config=config,
         thresholds=thresholds,
@@ -350,9 +369,10 @@ def predict_probabilities(
     model: Pipeline,
     frame: pd.DataFrame,
 ) -> pd.Series:
-    features = build_ml_features(frame)
+    data = _ordered(frame)
+    features = build_ml_features(data)
     eligible = features.notna().all(axis=1)
-    probabilities = pd.Series(np.nan, index=frame.reset_index(drop=True).index, dtype=float)
+    probabilities = pd.Series(np.nan, index=data.index, dtype=float)
     positions = np.flatnonzero(eligible.to_numpy())
     if len(positions):
         probabilities.iloc[positions] = model.predict_proba(features.iloc[positions])[:, 1]
