@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import lzma
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import numpy as np
@@ -27,6 +28,7 @@ _BI5_DTYPE = np.dtype(
         ("bid_volume", ">f4"),
     ]
 )
+_TRANSIENT_HTTP_STATUS = frozenset({429, 500, 502, 503, 504})
 
 
 @dataclass(frozen=True)
@@ -57,17 +59,53 @@ def _utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
-def fetch_bi5_bytes(symbol: str, day: datetime, *, timeout: float = 20.0) -> bytes | None:
-    """Fetch one trusted Dukascopy BI5 object; return None only for HTTP 404."""
+def _open_bi5_once(request: Request, *, timeout: float) -> bytes:
+    with urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed trusted host
+        return response.read()
+
+
+def fetch_bi5_bytes(
+    symbol: str,
+    day: datetime,
+    *,
+    timeout: float = 20.0,
+    max_attempts: int = 5,
+    backoff_seconds: float = 1.0,
+) -> bytes | None:
+    """Fetch one trusted Dukascopy BI5 object with bounded transient retries.
+
+    HTTP 404 is the only status interpreted as a missing source object. HTTP
+    429/500/502/503/504 and URL-level transport errors are retried with
+    deterministic exponential backoff. If the retry budget is exhausted, the
+    original exception is raised: research data is never silently skipped just
+    because the provider is temporarily unavailable.
+    """
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be >= 1")
+    if backoff_seconds < 0:
+        raise ValueError("backoff_seconds must be non-negative")
+
     url = dukascopy_tick_url(symbol, day)
     request = Request(url, headers={"User-Agent": "ConfluenceLab/0.5"})
-    try:
-        with urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed trusted host
-            return response.read()
-    except HTTPError as exc:
-        if exc.code == 404:
-            return None
-        raise
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return _open_bi5_once(request, timeout=timeout)
+        except HTTPError as exc:
+            if exc.code == 404:
+                return None
+            retryable = exc.code in _TRANSIENT_HTTP_STATUS
+            if not retryable or attempt == max_attempts:
+                raise
+        except URLError:
+            if attempt == max_attempts:
+                raise
+
+        delay = backoff_seconds * (2 ** (attempt - 1))
+        if delay > 0:
+            time.sleep(delay)
+
+    raise RuntimeError("unreachable BI5 retry state")
 
 
 def decode_bi5_ticks_vectorized(
