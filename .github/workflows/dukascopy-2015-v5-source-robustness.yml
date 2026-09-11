@@ -1,8 +1,11 @@
 name: Dukascopy EURUSD 2015 V5 Source Robustness
 
-# Attempt 2 only: attempt 1 (run 34567258684) ended on HTTP 503 before any
-# trading result/report existed. The retry adds bounded transient transport
-# retry/backoff only; the preregistered model, data construction and gates are unchanged.
+# Attempt 3 only. Attempt 1 (run 34567258684) ended on HTTP 503 and attempt 2
+# (run 34567563016) ended on a socket read TimeoutError; neither produced a
+# complete dataset, report, or trading result. Transport hardening now covers
+# bounded retries for transient HTTP/URL/read-timeout failures only. The
+# preregistered V5 model, source construction, threshold, expiry and evidence
+# gates are unchanged.
 on:
   push:
     branches: [main]
