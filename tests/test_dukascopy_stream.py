@@ -79,7 +79,9 @@ def test_streaming_downloader_respects_exact_interval(monkeypatch):
         datetime(2020, 1, 1, 0, 1, tzinfo=timezone.utc),
         datetime(2020, 1, 1, 0, 3, tzinfo=timezone.utc),
     )
-    expected = pd.date_range("2020-01-01T00:01:00Z", periods=2, freq="min")
+    expected = pd.date_range(
+        "2020-01-01T00:01:00Z", periods=2, freq="min", name="timestamp"
+    )
     pd.testing.assert_index_equal(pd.DatetimeIndex(result.frame["timestamp"]), expected)
 
 
