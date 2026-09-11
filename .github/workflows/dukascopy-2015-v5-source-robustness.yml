@@ -1,11 +1,12 @@
 name: Dukascopy EURUSD 2015 V5 Source Robustness
 
-# Attempt 3 only. Attempt 1 (run 34567258684) ended on HTTP 503 and attempt 2
-# (run 34567563016) ended on a socket read TimeoutError; neither produced a
-# complete dataset, report, or trading result. Transport hardening now covers
-# bounded retries for transient HTTP/URL/read-timeout failures only. The
-# preregistered V5 model, source construction, threshold, expiry and evidence
-# gates are unchanged.
+# Attempt 4. Attempts 1-3 produced no complete dataset or V5 trading metric:
+# run 34567258684 ended on HTTP 503, run 34567563016 ended on a read timeout,
+# and run 34568459430 exposed the non-canonical daily tick URL/epoch bug.
+# Protocol Amendment 1 freezes the corrected canonical hourly BI5 acquisition
+# path, hour-relative timestamps and transport-only batching before this run.
+# The preregistered V5 model, threshold, expiry, payout scenario and evidence
+# gates remain unchanged.
 on:
   push:
     branches: [main]
