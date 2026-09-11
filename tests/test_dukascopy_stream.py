@@ -4,8 +4,10 @@ import hashlib
 import lzma
 import struct
 from datetime import datetime, timezone
+from urllib.error import HTTPError
 
 import pandas as pd
+import pytest
 
 import confluence_lab.dukascopy_stream as stream
 from confluence_lab.dukascopy import decode_bi5_ticks
@@ -21,6 +23,16 @@ def _payload(prices: list[tuple[int, int, int]]) -> bytes:
     return lzma.compress(raw)
 
 
+def _http_error(code: int) -> HTTPError:
+    return HTTPError(
+        "https://www.dukascopy.com/datafeed/EURUSD/example.bi5",
+        code,
+        "test",
+        hdrs=None,
+        fp=None,
+    )
+
+
 def test_vectorized_decoder_matches_reference_decoder():
     payload = _payload(
         [
@@ -33,6 +45,76 @@ def test_vectorized_decoder_matches_reference_decoder():
     reference = decode_bi5_ticks(payload, symbol="EURUSD", day=day)
     vectorized = stream.decode_bi5_ticks_vectorized(payload, symbol="EURUSD", day=day)
     pd.testing.assert_frame_equal(vectorized, reference, check_dtype=False, rtol=1e-7, atol=1e-9)
+
+
+def test_fetch_retries_transient_503_then_succeeds(monkeypatch):
+    expected = b"payload"
+    calls = []
+    sleeps = []
+
+    def fake_open(request, *, timeout):
+        calls.append((request.full_url, timeout))
+        if len(calls) < 3:
+            raise _http_error(503)
+        return expected
+
+    monkeypatch.setattr(stream, "_open_bi5_once", fake_open)
+    monkeypatch.setattr(stream.time, "sleep", sleeps.append)
+
+    result = stream.fetch_bi5_bytes(
+        "EURUSD",
+        datetime(2020, 1, 1, tzinfo=timezone.utc),
+        timeout=7.0,
+        max_attempts=3,
+        backoff_seconds=0.25,
+    )
+    assert result == expected
+    assert len(calls) == 3
+    assert sleeps == [0.25, 0.5]
+
+
+def test_fetch_404_is_missing_without_retry(monkeypatch):
+    calls = []
+    sleeps = []
+
+    def fake_open(request, *, timeout):
+        calls.append(1)
+        raise _http_error(404)
+
+    monkeypatch.setattr(stream, "_open_bi5_once", fake_open)
+    monkeypatch.setattr(stream.time, "sleep", sleeps.append)
+
+    result = stream.fetch_bi5_bytes(
+        "EURUSD",
+        datetime(2020, 1, 1, tzinfo=timezone.utc),
+        max_attempts=5,
+    )
+    assert result is None
+    assert len(calls) == 1
+    assert sleeps == []
+
+
+def test_fetch_exhausted_503_still_raises(monkeypatch):
+    calls = []
+    sleeps = []
+
+    def fake_open(request, *, timeout):
+        calls.append(1)
+        raise _http_error(503)
+
+    monkeypatch.setattr(stream, "_open_bi5_once", fake_open)
+    monkeypatch.setattr(stream.time, "sleep", sleeps.append)
+
+    with pytest.raises(HTTPError) as exc_info:
+        stream.fetch_bi5_bytes(
+            "EURUSD",
+            datetime(2020, 1, 1, tzinfo=timezone.utc),
+            max_attempts=3,
+            backoff_seconds=0.1,
+        )
+    assert exc_info.value.code == 503
+    assert len(calls) == 3
+    assert sleeps == [0.1, 0.2]
 
 
 def test_streaming_downloader_hashes_sources_and_drops_missing_days(monkeypatch):
@@ -102,13 +184,9 @@ def test_streaming_downloader_respects_exact_interval(monkeypatch):
 
 def test_streaming_downloader_rejects_empty_interval(monkeypatch):
     monkeypatch.setattr(stream, "fetch_bi5_bytes", lambda *args, **kwargs: None)
-    try:
+    with pytest.raises(ValueError, match="no candles"):
         stream.download_candles_streaming(
             "EURUSD",
             datetime(2020, 1, 1, tzinfo=timezone.utc),
             datetime(2020, 1, 2, tzinfo=timezone.utc),
         )
-    except ValueError as exc:
-        assert "no candles" in str(exc)
-    else:
-        raise AssertionError("expected no-candles failure")
