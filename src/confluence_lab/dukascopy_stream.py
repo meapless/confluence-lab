@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import lzma
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError, URLError
@@ -32,8 +33,8 @@ _TRANSIENT_HTTP_STATUS = frozenset({429, 500, 502, 503, 504})
 
 
 @dataclass(frozen=True)
-class DukascopyDaySource:
-    day: str
+class DukascopySourceObject:
+    hour: str
     url: str
     status: str
     downloaded_bytes: int
@@ -50,13 +51,18 @@ class DukascopyCandleDownload:
     timeframe: str
     price: str
     frame: pd.DataFrame
-    sources: tuple[DukascopyDaySource, ...]
+    sources: tuple[DukascopySourceObject, ...]
 
 
 def _utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _utc_hour(value: datetime) -> datetime:
+    value = _utc(value)
+    return value.replace(minute=0, second=0, microsecond=0)
 
 
 def _open_bi5_once(request: Request, *, timeout: float) -> bytes:
@@ -66,13 +72,13 @@ def _open_bi5_once(request: Request, *, timeout: float) -> bytes:
 
 def fetch_bi5_bytes(
     symbol: str,
-    day: datetime,
+    hour: datetime,
     *,
     timeout: float = 20.0,
     max_attempts: int = 5,
     backoff_seconds: float = 1.0,
 ) -> bytes | None:
-    """Fetch one trusted Dukascopy BI5 object with bounded transient retries.
+    """Fetch one hourly Dukascopy BI5 object with bounded transient retries.
 
     HTTP 404 is the only status interpreted as a missing source object. HTTP
     429/500/502/503/504, URL-level transport errors and socket/SSL read
@@ -86,8 +92,9 @@ def fetch_bi5_bytes(
     if backoff_seconds < 0:
         raise ValueError("backoff_seconds must be non-negative")
 
-    url = dukascopy_tick_url(symbol, day)
-    request = Request(url, headers={"User-Agent": "ConfluenceLab/0.5"})
+    hour = _utc_hour(hour)
+    url = dukascopy_tick_url(symbol, hour)
+    request = Request(url, headers={"User-Agent": "ConfluenceLab/0.6"})
 
     for attempt in range(1, max_attempts + 1):
         try:
@@ -115,7 +122,11 @@ def decode_bi5_ticks_vectorized(
     symbol: str,
     day: datetime,
 ) -> pd.DataFrame:
-    """Decode a daily BI5 payload using NumPy rather than a Python tick loop."""
+    """Decode one hourly BI5 payload using NumPy rather than a Python tick loop.
+
+    ``day`` remains the keyword for compatibility with the reference decoder,
+    but its hour component is significant because BI5 offsets are hour-relative.
+    """
     columns = ["timestamp", "ask", "bid", "ask_volume", "bid_volume"]
     if not payload:
         return pd.DataFrame(columns=columns)
@@ -128,7 +139,7 @@ def decode_bi5_ticks_vectorized(
         return pd.DataFrame(columns=columns)
 
     symbol = normalize_symbol(symbol)
-    base = pd.Timestamp(_utc(day)).normalize()
+    base = pd.Timestamp(_utc_hour(day))
     divisor = float(price_divisor(symbol))
     timestamps = base + pd.to_timedelta(
         values["millisecond"].astype(np.int64), unit="ms"
@@ -144,6 +155,16 @@ def decode_bi5_ticks_vectorized(
     )
 
 
+def _hour_sequence(start: datetime, end: datetime) -> list[datetime]:
+    current = _utc_hour(start)
+    final = _utc_hour(end - timedelta(microseconds=1))
+    hours: list[datetime] = []
+    while current <= final:
+        hours.append(current)
+        current += timedelta(hours=1)
+    return hours
+
+
 def download_candles_streaming(
     symbol: str,
     start: datetime,
@@ -152,13 +173,16 @@ def download_candles_streaming(
     timeframe: str = "1min",
     price: str = "mid",
     timeout: float = 20.0,
+    max_workers: int = 4,
+    batch_hours: int = 24,
+    pause_between_batches_seconds: float = 0.25,
 ) -> DukascopyCandleDownload:
-    """Build candles one day at a time while retaining raw-source SHA-256 provenance.
+    """Build midpoint candles from canonical hourly Dukascopy raw-tick objects.
 
-    Unlike ``download_range``, this function never retains the whole multi-day
-    tick history in memory. Each BI5 day is decoded, converted to candles and
-    discarded before the next day is processed. The BI5 decoder is vectorized,
-    so the runtime scales with daily payload size without a Python object per tick.
+    Source objects are fetched in small fixed-concurrency batches, then decoded,
+    resampled and discarded one hour at a time. The function never retains a
+    full year of ticks in memory. ``executor.map`` preserves chronological input
+    order, and the final candle frame is sorted and validated before return.
     """
     symbol = normalize_symbol(symbol)
     start_utc = _utc(start)
@@ -167,52 +191,66 @@ def download_candles_streaming(
         raise ValueError("end must be after start")
     if price not in {"mid", "bid", "ask"}:
         raise ValueError("price must be one of: mid, bid, ask")
+    if max_workers < 1:
+        raise ValueError("max_workers must be >= 1")
+    if batch_hours < 1:
+        raise ValueError("batch_hours must be >= 1")
+    if pause_between_batches_seconds < 0:
+        raise ValueError("pause_between_batches_seconds must be non-negative")
 
+    hours = _hour_sequence(start_utc, end_utc)
     pieces: list[pd.DataFrame] = []
-    sources: list[DukascopyDaySource] = []
-    current = start_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-    final_day = (end_utc - timedelta(microseconds=1)).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
+    sources: list[DukascopySourceObject] = []
 
-    while current <= final_day:
-        url = dukascopy_tick_url(symbol, current)
-        payload = fetch_bi5_bytes(symbol, current, timeout=timeout)
-        if payload is None:
-            sources.append(
-                DukascopyDaySource(
-                    day=current.date().isoformat(),
-                    url=url,
-                    status="missing_404",
-                    downloaded_bytes=0,
-                    sha256=None,
-                    ticks=0,
-                    candles=0,
+    for batch_start in range(0, len(hours), batch_hours):
+        batch = hours[batch_start : batch_start + batch_hours]
+        workers = min(max_workers, len(batch))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            payloads = list(
+                executor.map(
+                    lambda hour: fetch_bi5_bytes(symbol, hour, timeout=timeout),
+                    batch,
                 )
             )
-            current += timedelta(days=1)
-            continue
 
-        digest = hashlib.sha256(payload).hexdigest()
-        ticks = decode_bi5_ticks_vectorized(payload, symbol=symbol, day=current)
-        candles = ticks_to_candles(ticks, timeframe=timeframe, price=price)
-        if not candles.empty:
-            mask = (candles["timestamp"] >= start_utc) & (candles["timestamp"] < end_utc)
-            candles = candles.loc[mask].reset_index(drop=True)
+        for hour, payload in zip(batch, payloads, strict=True):
+            url = dukascopy_tick_url(symbol, hour)
+            if payload is None:
+                sources.append(
+                    DukascopySourceObject(
+                        hour=hour.isoformat(),
+                        url=url,
+                        status="missing_404",
+                        downloaded_bytes=0,
+                        sha256=None,
+                        ticks=0,
+                        candles=0,
+                    )
+                )
+                continue
+
+            digest = hashlib.sha256(payload).hexdigest()
+            ticks = decode_bi5_ticks_vectorized(payload, symbol=symbol, day=hour)
+            candles = ticks_to_candles(ticks, timeframe=timeframe, price=price)
             if not candles.empty:
-                pieces.append(candles)
-        sources.append(
-            DukascopyDaySource(
-                day=current.date().isoformat(),
-                url=url,
-                status="downloaded",
-                downloaded_bytes=len(payload),
-                sha256=digest,
-                ticks=len(ticks),
-                candles=len(candles),
+                mask = (candles["timestamp"] >= start_utc) & (candles["timestamp"] < end_utc)
+                candles = candles.loc[mask].reset_index(drop=True)
+                if not candles.empty:
+                    pieces.append(candles)
+            sources.append(
+                DukascopySourceObject(
+                    hour=hour.isoformat(),
+                    url=url,
+                    status="downloaded",
+                    downloaded_bytes=len(payload),
+                    sha256=digest,
+                    ticks=len(ticks),
+                    candles=len(candles),
+                )
             )
-        )
-        current += timedelta(days=1)
+
+        if batch_start + batch_hours < len(hours) and pause_between_batches_seconds > 0:
+            time.sleep(pause_between_batches_seconds)
 
     if not pieces:
         raise ValueError("Dukascopy returned no candles for the requested interval")
