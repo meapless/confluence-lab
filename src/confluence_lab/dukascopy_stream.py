@@ -1,19 +1,31 @@
 from __future__ import annotations
 
 import hashlib
+import lzma
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+import numpy as np
 import pandas as pd
 
 from .data import validate_dataset
 from .dukascopy import (
-    decode_bi5_ticks,
     dukascopy_tick_url,
     normalize_symbol,
+    price_divisor,
     ticks_to_candles,
+)
+
+_BI5_DTYPE = np.dtype(
+    [
+        ("millisecond", ">u4"),
+        ("ask_raw", ">u4"),
+        ("bid_raw", ">u4"),
+        ("ask_volume", ">f4"),
+        ("bid_volume", ">f4"),
+    ]
 )
 
 
@@ -58,6 +70,41 @@ def fetch_bi5_bytes(symbol: str, day: datetime, *, timeout: float = 20.0) -> byt
         raise
 
 
+def decode_bi5_ticks_vectorized(
+    payload: bytes,
+    *,
+    symbol: str,
+    day: datetime,
+) -> pd.DataFrame:
+    """Decode a daily BI5 payload using NumPy rather than a Python tick loop."""
+    columns = ["timestamp", "ask", "bid", "ask_volume", "bid_volume"]
+    if not payload:
+        return pd.DataFrame(columns=columns)
+
+    raw = lzma.decompress(payload)
+    if len(raw) % _BI5_DTYPE.itemsize:
+        raise ValueError("BI5 payload length is not a multiple of the 20-byte tick record")
+    values = np.frombuffer(raw, dtype=_BI5_DTYPE)
+    if len(values) == 0:
+        return pd.DataFrame(columns=columns)
+
+    symbol = normalize_symbol(symbol)
+    base = pd.Timestamp(_utc(day)).normalize()
+    divisor = float(price_divisor(symbol))
+    timestamps = base + pd.to_timedelta(
+        values["millisecond"].astype(np.int64), unit="ms"
+    )
+    return pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "ask": values["ask_raw"].astype(np.float64) / divisor,
+            "bid": values["bid_raw"].astype(np.float64) / divisor,
+            "ask_volume": values["ask_volume"].astype(np.float64),
+            "bid_volume": values["bid_volume"].astype(np.float64),
+        }
+    )
+
+
 def download_candles_streaming(
     symbol: str,
     start: datetime,
@@ -71,8 +118,8 @@ def download_candles_streaming(
 
     Unlike ``download_range``, this function never retains the whole multi-day
     tick history in memory. Each BI5 day is decoded, converted to candles and
-    discarded before the next day is processed. This makes full-year M1 source
-    replication practical while keeping every raw object auditable.
+    discarded before the next day is processed. The BI5 decoder is vectorized,
+    so the runtime scales with daily payload size without a Python object per tick.
     """
     symbol = normalize_symbol(symbol)
     start_utc = _utc(start)
@@ -108,7 +155,7 @@ def download_candles_streaming(
             continue
 
         digest = hashlib.sha256(payload).hexdigest()
-        ticks = decode_bi5_ticks(payload, symbol=symbol, day=current)
+        ticks = decode_bi5_ticks_vectorized(payload, symbol=symbol, day=current)
         candles = ticks_to_candles(ticks, timeframe=timeframe, price=price)
         if not candles.empty:
             mask = (candles["timestamp"] >= start_utc) & (candles["timestamp"] < end_utc)
