@@ -75,10 +75,11 @@ def fetch_bi5_bytes(
     """Fetch one trusted Dukascopy BI5 object with bounded transient retries.
 
     HTTP 404 is the only status interpreted as a missing source object. HTTP
-    429/500/502/503/504 and URL-level transport errors are retried with
-    deterministic exponential backoff. If the retry budget is exhausted, the
-    original exception is raised: research data is never silently skipped just
-    because the provider is temporarily unavailable.
+    429/500/502/503/504, URL-level transport errors and socket/SSL read
+    ``TimeoutError`` exceptions are retried with deterministic exponential
+    backoff. If the retry budget is exhausted, the original exception is
+    raised: research data is never silently skipped because the provider is
+    temporarily unavailable.
     """
     if max_attempts < 1:
         raise ValueError("max_attempts must be >= 1")
@@ -97,7 +98,7 @@ def fetch_bi5_bytes(
             retryable = exc.code in _TRANSIENT_HTTP_STATUS
             if not retryable or attempt == max_attempts:
                 raise
-        except URLError:
+        except (URLError, TimeoutError):
             if attempt == max_attempts:
                 raise
 
