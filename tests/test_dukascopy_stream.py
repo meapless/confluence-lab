@@ -73,6 +73,60 @@ def test_fetch_retries_transient_503_then_succeeds(monkeypatch):
     assert sleeps == [0.25, 0.5]
 
 
+def test_fetch_retries_read_timeout_then_succeeds(monkeypatch):
+    expected = b"payload"
+    calls = []
+    sleeps = []
+
+    def fake_open(request, *, timeout):
+        calls.append((request.full_url, timeout))
+        if len(calls) == 1:
+            raise TimeoutError("The read operation timed out")
+        return expected
+
+    monkeypatch.setattr(stream, "_open_bi5_once", fake_open)
+    monkeypatch.setattr(stream.time, "sleep", sleeps.append)
+
+    result = stream.fetch_bi5_bytes(
+        "EURUSD",
+        datetime(2020, 1, 1, tzinfo=timezone.utc),
+        timeout=11.0,
+        max_attempts=2,
+        backoff_seconds=0.5,
+    )
+    assert result == expected
+    assert len(calls) == 2
+    assert calls == [
+        (calls[0][0], 11.0),
+        (calls[0][0], 11.0),
+    ]
+    assert sleeps == [0.5]
+
+
+def test_fetch_exhausted_read_timeout_still_raises(monkeypatch):
+    calls = []
+    sleeps = []
+
+    def fake_open(request, *, timeout):
+        calls.append((request.full_url, timeout))
+        raise TimeoutError("The read operation timed out")
+
+    monkeypatch.setattr(stream, "_open_bi5_once", fake_open)
+    monkeypatch.setattr(stream.time, "sleep", sleeps.append)
+
+    with pytest.raises(TimeoutError, match="read operation timed out"):
+        stream.fetch_bi5_bytes(
+            "EURUSD",
+            datetime(2020, 1, 1, tzinfo=timezone.utc),
+            timeout=13.0,
+            max_attempts=3,
+            backoff_seconds=0.2,
+        )
+    assert len(calls) == 3
+    assert [timeout for _, timeout in calls] == [13.0, 13.0, 13.0]
+    assert sleeps == [0.2, 0.4]
+
+
 def test_fetch_404_is_missing_without_retry(monkeypatch):
     calls = []
     sleeps = []
