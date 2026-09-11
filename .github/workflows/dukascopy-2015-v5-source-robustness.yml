@@ -1,0 +1,44 @@
+name: Dukascopy EURUSD 2015 V5 Source Robustness
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/dukascopy-2015-v5-source-robustness.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  source-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: Verify research tests before Dukascopy 2015 access
+        run: pytest
+
+      - name: Run preregistered frozen V5 Dukascopy source test
+        run: >-
+          python scripts/run_dukascopy_2015_v5_source_robustness.py
+          --output benchmark-results/dukascopy-eurusd-m1-2015-v5-source-robustness.json
+
+      - name: Upload source robustness report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dukascopy-eurusd-2015-v5-source-robustness
+          path: benchmark-results/dukascopy-eurusd-m1-2015-v5-source-robustness.json
+          if-no-files-found: error
+          retention-days: 30
