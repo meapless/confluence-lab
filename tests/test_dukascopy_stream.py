@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import pandas as pd
 
 import confluence_lab.dukascopy_stream as stream
+from confluence_lab.dukascopy import decode_bi5_ticks
 
 _TICK = struct.Struct(">IIIff")
 
@@ -18,6 +19,20 @@ def _payload(prices: list[tuple[int, int, int]]) -> bytes:
         for milliseconds, ask, bid in prices
     )
     return lzma.compress(raw)
+
+
+def test_vectorized_decoder_matches_reference_decoder():
+    payload = _payload(
+        [
+            (0, 110010, 109990),
+            (17_500, 110023, 110002),
+            (59_999, 109998, 109979),
+        ]
+    )
+    day = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    reference = decode_bi5_ticks(payload, symbol="EURUSD", day=day)
+    vectorized = stream.decode_bi5_ticks_vectorized(payload, symbol="EURUSD", day=day)
+    pd.testing.assert_frame_equal(vectorized, reference, check_dtype=False, rtol=1e-7, atol=1e-9)
 
 
 def test_streaming_downloader_hashes_sources_and_drops_missing_days(monkeypatch):
