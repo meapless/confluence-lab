@@ -30,7 +30,10 @@ from confluence_lab.v5_replication import (
 )
 
 SOURCE_YEAR = 2015
-PROTOCOL_VERSION = "v5-dukascopy-2015-source-robustness-1"
+PROTOCOL_VERSION = "v5-dukascopy-2015-source-robustness-2"
+SOURCE_MAX_WORKERS = 4
+SOURCE_BATCH_HOURS = 24
+SOURCE_BATCH_PAUSE_SECONDS = 0.25
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -148,6 +151,9 @@ def main(argv: list[str] | None = None) -> int:
         timeframe="1min",
         price="mid",
         timeout=30.0,
+        max_workers=SOURCE_MAX_WORKERS,
+        batch_hours=SOURCE_BATCH_HOURS,
+        pause_between_batches_seconds=SOURCE_BATCH_PAUSE_SECONDS,
     )
     primary = evaluate_frozen_v5(fit, source.frame)
     primary_pass = _primary_pass(primary)
@@ -164,11 +170,18 @@ def main(argv: list[str] | None = None) -> int:
         classification = "source_robustness_failed"
 
     model_params = fit.model.get_params()
+    source_dates = {item.hour[:10] for item in source.sources}
     report = {
         "study_kind": "preregistered_quote_source_robustness",
         "protocol_version": PROTOCOL_VERSION,
         "preregistration": "research/hypotheses/v5-dukascopy-2015-source-robustness-preregistration.md",
+        "protocol_amendment": "research/hypotheses/v5-dukascopy-2015-source-robustness-protocol-amendment-1.md",
         "parent_replication": "research/results/fxcm-2015-v5-replication.md",
+        "prior_execution_failures": [
+            "research/results/dukascopy-2015-v5-source-robustness-attempt1-execution-failure.md",
+            "research/results/dukascopy-2015-v5-source-robustness-attempt2-execution-failure.md",
+            "research/results/dukascopy-2015-v5-source-robustness-attempt3-execution-failure.md",
+        ],
         "interpretation_warning": (
             "2015 has already been seen on FXCM. This is quote-source robustness, not "
             "a second fresh temporal replication. The fixed payout is hypothetical and "
@@ -186,16 +199,25 @@ def main(argv: list[str] | None = None) -> int:
             "files": [asdict(item) for item in training.files],
         },
         "evaluation_source": {
-            "provider": "Dukascopy historical BI5 tick feed",
+            "provider": "Dukascopy historical BI5 raw tick feed",
             "symbol": SYMBOL,
             "year": SOURCE_YEAR,
-            "construction": "tick midpoint resampled to UTC 1-minute OHLC, one source day at a time",
+            "construction": (
+                "canonical hourly raw bid/ask BI5 objects; per-tick midpoint; "
+                "UTC 1-minute OHLC; object-by-object decode/resample"
+            ),
+            "transport": {
+                "max_workers": SOURCE_MAX_WORKERS,
+                "batch_hours": SOURCE_BATCH_HOURS,
+                "pause_between_batches_seconds": SOURCE_BATCH_PAUSE_SECONDS,
+            },
             "rows": len(source.frame),
             "fingerprint": dataframe_fingerprint(source.frame),
             "diagnostics": asdict(diagnose_dataset(source.frame)),
-            "source_days": len(source.sources),
-            "downloaded_days": sum(item.status == "downloaded" for item in source.sources),
-            "missing_404_days": sum(item.status == "missing_404" for item in source.sources),
+            "calendar_days_represented_in_source_manifest": len(source_dates),
+            "source_objects": len(source.sources),
+            "downloaded_objects": sum(item.status == "downloaded" for item in source.sources),
+            "missing_404_objects": sum(item.status == "missing_404" for item in source.sources),
             "sources": [asdict(item) for item in source.sources],
         },
         "frozen_candidate": {
@@ -243,9 +265,18 @@ def main(argv: list[str] | None = None) -> int:
     print("fxcm_2014_fingerprint_verified:", True)
     print("dukascopy_2015_rows:", len(source.frame))
     print("dukascopy_2015_fingerprint:", report["evaluation_source"]["fingerprint"])
+    print("source_objects:", report["evaluation_source"]["source_objects"])
+    print("downloaded_objects:", report["evaluation_source"]["downloaded_objects"])
+    print("missing_404_objects:", report["evaluation_source"]["missing_404_objects"])
     print("primary_source_test:", report["primary_source_test"])
     print("primary_source_test_pass:", primary_pass)
     print("robustness_calculated:", robustness is not None)
+    if robustness is not None:
+        print("robustness_requirements:", robustness["requirements"])
+        print("robustness_all_requirements_pass:", robustness["all_requirements_pass"])
+        print("entry_offset_2:", robustness["entry_offset_2"])
+        print("non_overlapping:", robustness["non_overlapping"])
+        print("moving_block_bootstrap_expectancy:", robustness["moving_block_bootstrap_expectancy"])
     print("classification:", classification)
     return 0
 
