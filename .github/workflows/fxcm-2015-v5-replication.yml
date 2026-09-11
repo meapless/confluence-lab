@@ -1,0 +1,44 @@
+name: FXCM EURUSD 2015 V5 Frozen Replication
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/fxcm-2015-v5-replication.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  replicate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: Verify research tests before 2015 access
+        run: pytest
+
+      - name: Run preregistered frozen V5 2015 replication
+        run: >-
+          python scripts/run_fxcm_2015_v5_replication.py
+          --output benchmark-results/fxcm-eurusd-m1-2015-v5-replication.json
+
+      - name: Upload frozen replication report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fxcm-eurusd-2015-v5-frozen-replication
+          path: benchmark-results/fxcm-eurusd-m1-2015-v5-replication.json
+          if-no-files-found: error
+          retention-days: 30
