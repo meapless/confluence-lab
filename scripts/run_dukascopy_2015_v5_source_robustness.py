@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 from confluence_lab.data import dataframe_fingerprint, diagnose_dataset
-from confluence_lab.dukascopy_stream import download_candles_streaming
+from confluence_lab.dukascopy_stream import DukascopyAcquisitionError, download_candles_streaming
 from confluence_lab.fxcm import download_fxcm_year
 from confluence_lab.ml import ML_FEATURE_COLUMNS
 from confluence_lab.ml_experiment import evidence_gate
@@ -34,6 +34,8 @@ PROTOCOL_VERSION = "v5-dukascopy-2015-source-robustness-2"
 SOURCE_MAX_WORKERS = 4
 SOURCE_BATCH_HOURS = 24
 SOURCE_BATCH_PAUSE_SECONDS = 0.25
+SOURCE_MAX_COMPLETION_PASSES = 3
+SOURCE_COMPLETION_PASS_PAUSE_SECONDS = 15.0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -132,6 +134,44 @@ def _post_pass_robustness(source_frame, fit, primary):
     }
 
 
+def _write_json(path: Path, report: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, indent=2, default=str, allow_nan=False), encoding="utf-8")
+
+
+def _acquisition_failure_report(error: DukascopyAcquisitionError, observed_training_fingerprint: str) -> dict[str, object]:
+    return {
+        "study_kind": "preregistered_quote_source_robustness",
+        "protocol_version": PROTOCOL_VERSION,
+        "classification": "source_acquisition_incomplete",
+        "trading_result_produced": False,
+        "preregistration": "research/hypotheses/v5-dukascopy-2015-source-robustness-preregistration.md",
+        "protocol_amendment": "research/hypotheses/v5-dukascopy-2015-source-robustness-protocol-amendment-1.md",
+        "parent_replication": "research/results/fxcm-2015-v5-replication.md",
+        "training_fingerprint_verified": observed_training_fingerprint == EXPECTED_TRAIN_FINGERPRINT,
+        "expected_training_fingerprint": EXPECTED_TRAIN_FINGERPRINT,
+        "observed_training_fingerprint": observed_training_fingerprint,
+        "evaluation_source": {
+            "provider": "Dukascopy historical BI5 raw tick feed",
+            "symbol": SYMBOL,
+            "year": SOURCE_YEAR,
+            "requested_objects": error.requested_objects,
+            "successful_or_404_objects": len(error.sources),
+            "unavailable_required_objects": len(error.failures),
+            "completion_passes": error.completion_passes,
+            "sources": [asdict(item) for item in error.sources],
+            "failures": [asdict(item) for item in error.failures],
+        },
+        "frozen_candidate_unchanged": True,
+        "primary_source_test": None,
+        "robustness": None,
+        "interpretation_warning": (
+            "No complete Dukascopy 2015 dataset was acquired, so no V5 source-robustness "
+            "metric or classification was produced. This is an execution result only."
+        ),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -144,17 +184,30 @@ def main(argv: list[str] | None = None) -> int:
         )
     fit = fit_frozen_v5(training.frame)
 
-    source = download_candles_streaming(
-        SYMBOL,
-        datetime(SOURCE_YEAR, 1, 1, tzinfo=timezone.utc),
-        datetime(SOURCE_YEAR + 1, 1, 1, tzinfo=timezone.utc),
-        timeframe="1min",
-        price="mid",
-        timeout=30.0,
-        max_workers=SOURCE_MAX_WORKERS,
-        batch_hours=SOURCE_BATCH_HOURS,
-        pause_between_batches_seconds=SOURCE_BATCH_PAUSE_SECONDS,
-    )
+    try:
+        source = download_candles_streaming(
+            SYMBOL,
+            datetime(SOURCE_YEAR, 1, 1, tzinfo=timezone.utc),
+            datetime(SOURCE_YEAR + 1, 1, 1, tzinfo=timezone.utc),
+            timeframe="1min",
+            price="mid",
+            timeout=30.0,
+            max_workers=SOURCE_MAX_WORKERS,
+            batch_hours=SOURCE_BATCH_HOURS,
+            pause_between_batches_seconds=SOURCE_BATCH_PAUSE_SECONDS,
+            max_completion_passes=SOURCE_MAX_COMPLETION_PASSES,
+            pause_between_completion_passes_seconds=SOURCE_COMPLETION_PASS_PAUSE_SECONDS,
+        )
+    except DukascopyAcquisitionError as error:
+        report = _acquisition_failure_report(error, observed_training_fingerprint)
+        _write_json(args.output, report)
+        print("classification:", report["classification"])
+        print("requested_objects:", error.requested_objects)
+        print("successful_or_404_objects:", len(error.sources))
+        print("unavailable_required_objects:", len(error.failures))
+        print("completion_passes:", error.completion_passes)
+        return 2
+
     primary = evaluate_frozen_v5(fit, source.frame)
     primary_pass = _primary_pass(primary)
 
@@ -181,6 +234,7 @@ def main(argv: list[str] | None = None) -> int:
             "research/results/dukascopy-2015-v5-source-robustness-attempt1-execution-failure.md",
             "research/results/dukascopy-2015-v5-source-robustness-attempt2-execution-failure.md",
             "research/results/dukascopy-2015-v5-source-robustness-attempt3-execution-failure.md",
+            "research/results/dukascopy-2015-v5-source-robustness-attempt4-execution-failure.md",
         ],
         "interpretation_warning": (
             "2015 has already been seen on FXCM. This is quote-source robustness, not "
@@ -210,6 +264,9 @@ def main(argv: list[str] | None = None) -> int:
                 "max_workers": SOURCE_MAX_WORKERS,
                 "batch_hours": SOURCE_BATCH_HOURS,
                 "pause_between_batches_seconds": SOURCE_BATCH_PAUSE_SECONDS,
+                "max_completion_passes": SOURCE_MAX_COMPLETION_PASSES,
+                "pause_between_completion_passes_seconds": SOURCE_COMPLETION_PASS_PAUSE_SECONDS,
+                "completion_passes_used": source.completion_passes_used,
             },
             "rows": len(source.frame),
             "fingerprint": dataframe_fingerprint(source.frame),
@@ -259,8 +316,7 @@ def main(argv: list[str] | None = None) -> int:
         ),
     }
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, indent=2, default=str, allow_nan=False), encoding="utf-8")
+    _write_json(args.output, report)
 
     print("fxcm_2014_fingerprint_verified:", True)
     print("dukascopy_2015_rows:", len(source.frame))
@@ -268,6 +324,7 @@ def main(argv: list[str] | None = None) -> int:
     print("source_objects:", report["evaluation_source"]["source_objects"])
     print("downloaded_objects:", report["evaluation_source"]["downloaded_objects"])
     print("missing_404_objects:", report["evaluation_source"]["missing_404_objects"])
+    print("completion_passes_used:", source.completion_passes_used)
     print("primary_source_test:", report["primary_source_test"])
     print("primary_source_test_pass:", primary_pass)
     print("robustness_calculated:", robustness is not None)
