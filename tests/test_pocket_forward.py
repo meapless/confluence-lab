@@ -41,7 +41,7 @@ def _candles():
     )
 
 
-def _payouts(observed_at="2026-09-14T08:01:04Z", payout=0.82):
+def _payouts(observed_at="2026-09-14T08:00:59Z", payout=0.82):
     return pd.DataFrame(
         {
             "asset": ["EURUSD_otc"],
@@ -85,7 +85,7 @@ def test_open_timestamp_semantics_never_uses_forming_future_candle(monkeypatch):
     assert result.source_candle_completed_at == pd.Timestamp("2026-09-14T08:01:00Z")
     assert result.decision_delay_seconds == 5.0
     assert result.payout == 0.82
-    assert result.payout_observed_at == pd.Timestamp("2026-09-14T08:01:04Z")
+    assert result.payout_observed_at == pd.Timestamp("2026-09-14T08:00:59Z")
     assert result.payout_age_seconds == 1.0
     assert result.probability_above_payout_break_even is True
 
@@ -110,13 +110,16 @@ def test_stale_completed_candle_is_no_trade_before_model_scoring(monkeypatch):
     assert result.decision_delay_seconds == 60.0
 
 
-def test_future_or_stale_payout_is_never_attached(monkeypatch):
+def test_post_signal_or_stale_payout_is_never_attached(monkeypatch):
     monkeypatch.setattr(pocket_forward, "build_ml_features", _simple_features)
-    future = _payouts(observed_at="2026-09-14T08:01:06Z")
+
+    # This payout is known by wall-clock scorer time (08:01:05), but it was not
+    # known at the canonical 08:01:00 signal boundary, so it must not be attached.
+    post_signal = _payouts(observed_at="2026-09-14T08:01:04Z")
     result = pocket_forward.score_latest_completed_pocket_bar(
         _fit(0.70),
         _candles(),
-        future,
+        post_signal,
         asset="EURUSD_otc",
         period_seconds=60,
         timestamp_semantics="open",
