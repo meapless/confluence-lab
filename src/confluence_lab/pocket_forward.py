@@ -116,8 +116,10 @@ def score_latest_completed_pocket_bar(
       later in the supplied snapshot cannot affect the decision.
     - A completed candle older than ``max_decision_delay_seconds`` is reported as
       NO TRADE rather than backfilled into a fake prospective signal.
-    - Payout is aligned only from an observation at or before the actual decision
-      timestamp. Stale/missing payout does not fabricate economics.
+    - The canonical signal timestamp is the completed candle boundary. Payout is
+      aligned only from an observation at or before that boundary, making the
+      signal identity deterministic even if the scorer runs a few seconds later.
+      Stale/missing payout does not fabricate economics.
 
     The function scores research observations only; it never places a trade.
     """
@@ -234,12 +236,15 @@ def score_latest_completed_pocket_bar(
             probability_up=probability_up,
         )
 
-    event = pd.DataFrame({"decision_timestamp": [decision_at]})
+    # Anchor payout evidence to the canonical signal boundary, not to the wall
+    # clock moment this function happened to execute. That allows the same market
+    # event to map to one deterministic forward candidate later.
+    event = pd.DataFrame({"signal_timestamp": [completed_at]})
     aligned = align_payouts_backward(
         event,
         payouts,
         asset=asset,
-        event_time_column="decision_timestamp",
+        event_time_column="signal_timestamp",
         max_age_seconds=max_payout_age_seconds,
     ).iloc[0]
 
