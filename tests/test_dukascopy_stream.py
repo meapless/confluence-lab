@@ -270,3 +270,86 @@ def test_streaming_downloader_validates_transport_batch_controls():
         stream.download_candles_streaming(
             "EURUSD", start, end, pause_between_batches_seconds=-0.1
         )
+
+
+def test_streaming_downloader_retries_only_deferred_hours(monkeypatch):
+    payload = _payload(
+        [
+            (0, 110010, 109990),
+            (60_000, 110020, 110000),
+        ]
+    )
+    calls: dict[int, int] = {}
+    sleeps: list[float] = []
+
+    def fake_fetch(symbol, hour, *, timeout=20.0):
+        calls[hour.hour] = calls.get(hour.hour, 0) + 1
+        if hour.hour == 1 and calls[hour.hour] == 1:
+            raise TimeoutError("temporary hour failure")
+        if hour.hour == 2:
+            return None
+        return payload
+
+    monkeypatch.setattr(stream, "fetch_bi5_bytes", fake_fetch)
+    monkeypatch.setattr(stream.time, "sleep", sleeps.append)
+
+    result = stream.download_candles_streaming(
+        "EURUSD",
+        datetime(2020, 1, 1, 0, tzinfo=timezone.utc),
+        datetime(2020, 1, 1, 3, tzinfo=timezone.utc),
+        max_workers=1,
+        batch_hours=3,
+        pause_between_batches_seconds=0.0,
+        max_completion_passes=3,
+        pause_between_completion_passes_seconds=0.0,
+    )
+
+    assert calls == {0: 1, 1: 2, 2: 1}
+    assert result.completion_passes_used == 2
+    assert len(result.sources) == 3
+    assert result.sources[0].retrieval_pass == 1
+    assert result.sources[1].retrieval_pass == 2
+    assert result.sources[2].status == "missing_404"
+    assert result.sources[2].retrieval_pass == 1
+    assert sleeps == []
+
+
+def test_streaming_downloader_fails_closed_after_completion_pass_budget(monkeypatch):
+    payload = _payload(
+        [
+            (0, 110010, 109990),
+            (60_000, 110020, 110000),
+        ]
+    )
+    calls: dict[int, int] = {}
+
+    def fake_fetch(symbol, hour, *, timeout=20.0):
+        calls[hour.hour] = calls.get(hour.hour, 0) + 1
+        if hour.hour == 1:
+            raise TimeoutError("persistent hour failure")
+        return payload
+
+    monkeypatch.setattr(stream, "fetch_bi5_bytes", fake_fetch)
+
+    with pytest.raises(stream.DukascopyAcquisitionError) as exc_info:
+        stream.download_candles_streaming(
+            "EURUSD",
+            datetime(2020, 1, 1, 0, tzinfo=timezone.utc),
+            datetime(2020, 1, 1, 2, tzinfo=timezone.utc),
+            max_workers=1,
+            batch_hours=2,
+            pause_between_batches_seconds=0.0,
+            max_completion_passes=2,
+            pause_between_completion_passes_seconds=0.0,
+        )
+
+    error = exc_info.value
+    assert calls == {0: 1, 1: 2}
+    assert error.requested_objects == 2
+    assert error.completion_passes == 2
+    assert len(error.sources) == 1
+    assert error.sources[0].hour == "2020-01-01T00:00:00+00:00"
+    assert error.sources[0].retrieval_pass == 1
+    assert len(error.failures) == 1
+    assert error.failures[0].hour == "2020-01-01T01:00:00+00:00"
+    assert error.failures[0].completion_pass == 2
